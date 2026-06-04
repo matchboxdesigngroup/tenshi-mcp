@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ssh-wp-tools": {
+      "command": "node",
+      "args": ["/Users/lema/Projects/ssh-triage-mcp/src/index.js"],
+      "env": {
+        "SSH_MCP_SERVERS_PATH": "/Users/lema/Projects/ssh-triage-mcp/servers.json"
+      }
+    }
+  }
+}
