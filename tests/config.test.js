@@ -71,7 +71,7 @@ describe('getSiteConfig', () => {
   it('throws for unknown site', async () => {
     await withServersFile(VALID_CONFIG, async ({ loadRegistry, getSiteConfig }) => {
       loadRegistry()
-      expect(() => getSiteConfig('testserver', 'unknown.com')).toThrow('Unknown site: unknown.com')
+      expect(() => getSiteConfig('testserver', 'unknown.com')).toThrow('Unknown site: unknown.com on server testserver')
     })
   })
 })

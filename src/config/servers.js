@@ -19,7 +19,7 @@ const ServerSchema = z.object({
 
 const RegistrySchema = z.object({
   servers: z.array(ServerSchema).min(1)
-})
+}).strict()
 
 /** @type {Map<string, z.infer<typeof ServerSchema>>} */
 let registry = new Map()
@@ -33,6 +33,7 @@ export function loadRegistry() {
 
 /** @returns {z.infer<typeof ServerSchema>} */
 export function getServerConfig(serverId) {
+  if (registry.size === 0) throw new Error('Registry not initialized — call loadRegistry() first')
   const server = registry.get(serverId)
   if (!server) throw new Error(`Unknown server: ${serverId}`)
   return server
