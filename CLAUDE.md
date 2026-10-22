@@ -2,6 +2,10 @@
 
 Local MCP server (stdio transport) that SSHs into configured WordPress servers and exposes `read_log` and `read_file` tools for Claude triage sessions.
 
+## Status
+
+The tool layer is under security review. Do not expose this server to untrusted input or use it against production servers until hardening lands. Security-relevant details are discussed in the private platform repo, not in public issues. See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution conventions and [CHANGELOG.md](CHANGELOG.md) for changes.
+
 ## Quick start
 
 ```bash

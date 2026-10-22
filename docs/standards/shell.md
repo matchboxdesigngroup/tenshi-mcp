@@ -1,8 +1,9 @@
 # Shell scripting conventions
 
-This document covers the conventions for every shell script in this repository —
-primarily Claude Code hooks in `.claude/hooks/` but also any standalone utility
-scripts. The goal is a consistent, auditable style: every script should be
+This document covers the conventions for any shell script added to this
+repository (for example Claude Code hooks or standalone utility scripts). The
+repository is a Node.js MCP server and currently contains no shell scripts, so
+this is guidance for future additions. The goal is a consistent, auditable style: every script should be
 readable without context, behave predictably under partial input, and degrade
 safely when something unexpected happens.
 
@@ -102,12 +103,12 @@ Rules:
 
 ## Fail modes
 
-Every hook must choose a fail mode and document it in the doc-block.
+Every hook-style script must choose a fail mode and document it in the doc-block.
 
 ### Fail-closed
 
-Use when a silent pass-through is worse than a false positive. Examples:
-`block-main-commits.sh`, `protect-env.sh`.
+Use when a silent pass-through is worse than a false positive, for example a
+hook that blocks commits to `main` or edits to `.env` files.
 
 - `set -uo pipefail` + `ERR` trap (see [Shebang and shell options](#shebang-and-shell-options)).
 - Exit 2 on every unexpected error path with a diagnostic on stderr.
@@ -116,7 +117,7 @@ Use when a silent pass-through is worse than a false positive. Examples:
 ### Fail-open (advisory)
 
 Use when false-positive rate is too high to block, or the hard gate lives
-elsewhere. Examples: `typecheck-ts.sh` (CI enforces), `scan-injection.sh`.
+elsewhere (for example CI, once it is added in M1).
 
 - `set -euo pipefail`.
 - `exit 0` unconditionally at the end.
@@ -157,7 +158,7 @@ defer to: [https://google.github.io/styleguide/shellguide.html](https://google.g
 
 ## Complete example
 
-Adapted from `protect-env.sh`. Shows doc-block format, `set -euo pipefail`,
+Illustrative example of a hypothetical `protect-env.sh` hook (not present in this repository). Shows doc-block format, `set -euo pipefail`,
 `jq` parsing, quoting, and fail-open behaviour.
 
 ```bash

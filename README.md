@@ -2,6 +2,10 @@
 
 A local MCP server (stdio transport) that SSHs into configured WordPress servers and exposes two tools — `read_log` and `read_file` — for use in Claude triage sessions.
 
+## Status
+
+The tool layer is under security review. Do not expose this server to untrusted input or use it against production servers until hardening lands. Security-relevant details are discussed in the private platform repo, not in public issues. See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution conventions and [CHANGELOG.md](CHANGELOG.md) for changes.
+
 ## Overview
 
 During a WordPress incident, you ask Claude things like "show me the last 50 error log lines for blueprintcoffee.com" or "read wp-config.php on that server." This MCP server handles the SSH connection, enforces a strict security model, and returns structured output back to Claude.
