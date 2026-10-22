@@ -2,64 +2,53 @@
 
 ## Purpose
 
-Reviews catch bugs and maintain consistency. They are not style debates — formatting and naming are handled by linters. Focus on correctness, architectural fit, and the review checklist below.
+Reviews catch bugs and keep the security model intact. They are not style debates. Focus on correctness, architectural fit, and the checklist below.
+
+## Who Reviews
+
+- Reviewers are always fresh agents or people; authors never review their own work.
+- Anything that decides who can read or do what (MCP tools and transport, command allowlist, path confinement, auth, secrets, concurrency) gets an Opus high reviewer. See the risk rule in [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 ## Reviewer Responsibilities
 
-- Review within one business day of assignment.
 - Approve only when you would be comfortable shipping the change yourself.
-- Block only on correctness bugs, security issues, or clear architectural violations. Prefer suggestions for style or nit-level concerns.
-- Use GitHub's **suggestion** feature for small, unambiguous fixes so the author can apply them with one click.
+- Block on correctness bugs, security issues, or clear architectural violations. Offer suggestions for nits.
+- Review at the exact head you approve; re-check after any new push.
 
 ## Author Responsibilities
 
-- Open a PR only when CI is green.
-- Keep PRs focused. A calculator feature (core + UI + block) in one PR is fine; unrelated cleanup should be a separate PR.
-- Respond to every comment — either apply the change or explain why not.
-- Do not force-push after review has started; add fixup commits instead.
+- Run `npm test` locally and paste the result in the PR. CI is being added in M1; until then there are no automated checks.
+- Keep PRs focused; unrelated cleanup is a separate PR.
+- Respond to every comment: apply the change or explain why not.
+- Do not force-push, rebase, or amend after review has started; add commits instead.
 
 ## Review Checklist
 
-Use `CLAUDE.md` as the primary reference. The checklist below distills the non-negotiable items:
+Use [CLAUDE.md](../../CLAUDE.md) and the ADRs in [docs/adrs/](../adrs/) as the references.
 
-### Calculation Correctness
-- [ ] Core `calculate()` output matches expected results for representative inputs (check against tests or manual spot-check).
-- [ ] Edge cases handled: zero values, very large amounts, boundary rates, max term.
-- [ ] `validateInputs()` collects all errors (not fail-fast) and returns `{ valid, errors }`.
+### Security model
+- [ ] Host access still limited to servers in the registry (`src/config/servers.js`, `src/ssh/client.js`).
+- [ ] Commands run through `src/ssh/executor.js` only, with the allowlist unchanged or deliberately and explicitly extended.
+- [ ] `read_file` paths still confined to the configured WordPress root; traversal cases tested.
+- [ ] Output caps (line and byte limits) still enforced server-side.
+- [ ] No user-controlled input reaches a shell command without validation.
 
-### Architecture Fit
-- [ ] New code follows the `core → ui → plugin` layering; no DOM references in `core/`.
-- [ ] Hook uses `useDebounce` (300 ms) before calling `calculate()`.
-- [ ] Shared primitives used (`CurrencyInput`, `PercentageInput`, `SelectInput`, `SliderInput`, `InputGroup`, `InlineError`, `LoadingState`) — no duplicate implementations.
-- [ ] New exports added to `package.json` exports map and `rollup.config.js`.
-
-### UI and Styling
-- [ ] Shared CSS classes used before any calculator-specific overrides (`calc-table-card`, `calc-chart-card`, `calc-grid`, `calc-col-*`, etc.).
-- [ ] Wide tables wrapped in `.calc-table-card-scroll` (and `--tall` when vertical scroll is also needed).
-- [ ] Columns containing tables or charts have `min-width: 0`.
-- [ ] Horizontal scroll verified at ≤767px viewport — no permanently clipped columns.
-- [ ] Summary stats use `<p>` elements for `.calc-summary-stat-label` and `.calc-summary-stat-value`.
-- [ ] Inline narrative values use `.calc-summary-statement*` classes, not stat classes.
-
-### WordPress Block
-- [ ] Block icon is a Font Awesome SVG path (not a dashicon string, not a custom SVG).
-- [ ] Inspector settings use `ToolsPanel` + `ToolsPanelItem` only — no new `PanelBody`.
-- [ ] `render.php` exists; `save: () => null` in `index.js`.
-
-### Pro Calculator Licensing
-- [ ] Slug registered in `matchbox_calc_inject_editor_license_data()` in **both** places: `calculators` payload and block iteration loop.
-- [ ] Uses `useLicenseWarning(slug)` and `LicenseWarning` component.
-- [ ] All six license states handled: `valid`, `no-license`, `expired`, `invalid`, `suspended`, `unresolved`.
+### Architecture fit
+- [ ] New tools live in `src/tools/` and are registered in `src/index.js`.
+- [ ] Config changes are validated by the zod schema in `src/config/servers.js`.
+- [ ] No new dependencies without discussion.
 
 ### Tests
-- [ ] Core engine has Jest tests covering the primary calculation path and at least one edge case.
-- [ ] UI hook has a `useCalculator` test.
-- [ ] No existing passing tests broken.
+- [ ] New or changed behavior has a vitest test under `tests/`, including at least one failure or abuse case for security-relevant code.
+- [ ] No existing tests removed, skipped, or weakened.
+- [ ] Tests use mocked SSH; none require a real server.
 
-### Security
-- [ ] No user-supplied strings injected into `dangerouslySetInnerHTML`, `eval`, or `innerHTML`.
-- [ ] No secrets, API keys, or `.env` values in source.
+### Hygiene
+- [ ] No secrets, `.env` values, real hostnames, IPs, usernames, personal paths, or client domains (public repo).
+- [ ] No exploit details in code comments, docs, or PR text.
+- [ ] [CHANGELOG.md](../../CHANGELOG.md) updated.
+- [ ] Commit subjects follow [git.md](git.md).
 
 ## Merge Criteria
 
-All checklist items relevant to the change must pass. CI must be green. At least one approval required. The PR author merges after approval (not the reviewer).
+All relevant checklist items pass, the approving review is on the current head, and CI is green once CI exists (M1). Merge with a merge commit.
