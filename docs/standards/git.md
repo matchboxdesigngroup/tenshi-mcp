@@ -44,7 +44,7 @@ History note: Tenshi-MCP commits before the docs bootstrap PR used lowercase con
 - Title matches the intended merge commit subject (imperative, 72 characters maximum).
 - Body follows [.github/pull_request_template.md](../../.github/pull_request_template.md): Why, What Changed, How to Test, Decisions to revisit, Follow-ups.
 - Target `main`. One PR per branch.
-- CI is being added in milestone M1; there are no automated checks yet. Run `npm test` locally and report the output.
+- CI runs install, test, and audit on every PR (see [CONTRIBUTING.md](../../CONTRIBUTING.md#ci-checks)). Also run `npm test` locally and report the output.
 - Merge strategy: merge commits, so reviewed commits are preserved. No squash or rebase merges.
 - The author does not review their own PR.
 

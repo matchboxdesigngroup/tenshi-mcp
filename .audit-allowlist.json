@@ -1,0 +1,181 @@
+{
+  "$comment": "High and critical npm audit advisories accepted temporarily. Each entry needs id (GHSA), package, severity (high or critical, as reported), reason, tracking issue and an expires date (YYYY-MM-DD, at most 60 days ahead). The check fails once an entry expires or its advisory is re-rated above the recorded severity. Remove entries when fixed; scripts/audit-check.mjs reports stale ones.",
+  "advisories": [
+    {
+      "id": "GHSA-22jm-h49p-29qw",
+      "package": "@modelcontextprotocol/sdk",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-46jr-4wx8-v453",
+      "package": "@modelcontextprotocol/sdk",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-6qxp-vccf-f47h",
+      "package": "@modelcontextprotocol/sdk",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-4c8g-83qw-93j6",
+      "package": "fast-uri",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-7p8r-x3mc-p8w7",
+      "package": "fast-uri",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-f65p-4m7j-42xc",
+      "package": "fast-uri",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-fph4-wmhf-6fwf",
+      "package": "fast-uri",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-jqff-g426-hqxp",
+      "package": "fast-uri",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-qw65-cvwx-89v3",
+      "package": "fast-uri",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-v2hh-gcrm-f6hx",
+      "package": "fast-uri",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-88fw-hqm2-52qc",
+      "package": "hono",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-mwp4-54f8-5fhr",
+      "package": "ip-address",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-28wg-ghj8-5hjv",
+      "package": "nanoid",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-2v37-7h3g-55p8",
+      "package": "nanoid",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-r28c-9q8g-f849",
+      "package": "postcss",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-jqcg-44mw-7w3h",
+      "package": "proxy-addr",
+      "severity": "critical",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-68fv-2mgg-jv7q",
+      "package": "source-map-js",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-5gmw-xhrv-c9v3",
+      "package": "tinypool",
+      "severity": "critical",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-85c8-ppgw-ccpr",
+      "package": "tinypool",
+      "severity": "critical",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-587h-7wmj-h5pm",
+      "package": "vite",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-fx2h-pf6j-xcff",
+      "package": "vite",
+      "severity": "high",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    },
+    {
+      "id": "GHSA-5xrq-8626-4rwp",
+      "package": "vitest",
+      "severity": "critical",
+      "reason": "Present on main when CI was added; dependency update tracked in #5",
+      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
+      "expires": "2026-11-30"
+    }
+  ]
+}

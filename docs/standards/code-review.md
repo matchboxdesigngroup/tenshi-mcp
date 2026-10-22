@@ -17,7 +17,7 @@ Reviews catch bugs and keep the security model intact. They are not style debate
 
 ## Author Responsibilities
 
-- Run `npm test` locally and paste the result in the PR. CI is being added in M1; until then there are no automated checks.
+- Run `npm test` locally and paste the result in the PR. CI (install, test, audit; see [CONTRIBUTING.md](../../CONTRIBUTING.md#ci-checks)) must also be green.
 - Keep PRs focused; unrelated cleanup is a separate PR.
 - Respond to every comment: apply the change or explain why not.
 - Do not force-push, rebase, or amend after review has started; add commits instead.
@@ -51,4 +51,4 @@ Use [CLAUDE.md](../../CLAUDE.md) and the ADRs in [docs/adrs/](../adrs/) as the r
 
 ## Merge Criteria
 
-All relevant checklist items pass, the approving review is on the current head, and CI is green once CI exists (M1). Merge with a merge commit.
+All relevant checklist items pass, the approving review is on the current head, and CI is green on that head. Merge with a merge commit.
