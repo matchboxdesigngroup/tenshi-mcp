@@ -72,7 +72,14 @@ All three must pass before merge. Only the official `actions/checkout` and `acti
 
 ### Audit allowlist
 
-Fix advisories rather than allowlisting them where possible (`npm audit fix`, or an upgrade). When an advisory cannot be fixed in the current PR, add an entry to `.audit-allowlist.json` with the advisory `id` (GHSA), `package`, `severity`, a `reason`, the tracking `issue`, and an `expires` date (`YYYY-MM-DD`). The check matches on advisory id and package together, fails once an entry is past its expiry date, and prints entries whose advisory no longer appears as stale so they can be removed. Never allowlist an advisory without a tracking issue; extend an expiry only with a reason in the PR.
+Fix advisories rather than allowlisting them where possible (`npm audit fix`, or an upgrade). When an advisory cannot be fixed in the current PR, add an entry to `.audit-allowlist.json` with the advisory `id` (GHSA), `package`, `severity` (`high` or `critical`, as reported), a `reason`, the tracking `issue`, and an `expires` date (`YYYY-MM-DD`, at most 60 days ahead). Never allowlist an advisory without a tracking issue; extend an expiry only with a reason in the PR.
+
+How the check behaves:
+
+- It runs `npm audit` with `--offline=false --registry=https://registry.npmjs.org/ --include=dev --include=optional --include=peer`, so offline mode, another registry, or `omit=dev` / `production` in `.npmrc` or the environment cannot hide advisories. It fails closed when npm returns an error or an incomplete report.
+- An entry matches on advisory id and package together. If the advisory is re-rated above the entry's `severity` (for example high to critical), the check fails until the entry is reviewed.
+- It fails on any malformed, duplicated, expired, or over-long entry, and lists all of them at once. Entries whose advisory no longer appears are printed as stale so they can be removed.
+- Known limit: because entries match on advisory id and package, a new install path to an already-allowlisted package and advisory is not reported separately.
 
 ## Definition of done
 

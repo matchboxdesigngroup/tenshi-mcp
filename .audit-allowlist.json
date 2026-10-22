@@ -1,5 +1,5 @@
 {
-  "$comment": "High and critical npm audit advisories accepted temporarily. Each entry needs id, package, reason, tracking issue and an expires date (YYYY-MM-DD); the check fails once an entry expires. Remove entries when fixed; scripts/audit-check.mjs reports stale ones.",
+  "$comment": "High and critical npm audit advisories accepted temporarily. Each entry needs id (GHSA), package, severity (high or critical, as reported), reason, tracking issue and an expires date (YYYY-MM-DD, at most 60 days ahead). The check fails once an entry expires or its advisory is re-rated above the recorded severity. Remove entries when fixed; scripts/audit-check.mjs reports stale ones.",
   "advisories": [
     {
       "id": "GHSA-22jm-h49p-29qw",
