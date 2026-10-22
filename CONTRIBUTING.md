@@ -66,13 +66,13 @@ Unit tests use vitest with mocked SSH; no real server is needed. `tests/integrat
 
 1. `npm ci` (install from the lockfile)
 2. `npm test` (Vitest unit tests)
-3. `npm run audit:check` (`npm audit`; fails on any high or critical advisory that is not in [`audit-allowlist.json`](audit-allowlist.json))
+3. `npm run audit:check` (`npm audit`; fails on any high or critical advisory that is not in [`.audit-allowlist.json`](.audit-allowlist.json), and on any expired allowlist entry)
 
-All three must pass before merge. Actions are pinned by commit SHA; the workflow uses no secrets and only reads the repository.
+All three must pass before merge. Only the official `actions/checkout` and `actions/setup-node` actions are used, pinned by full commit SHA with the version tag in a comment; the workflow uses no secrets and only reads the repository. Secret scanning is not part of CI yet; it waits for the scanning-approach ADR in the platform repo.
 
 ### Audit allowlist
 
-Fix advisories rather than allowlisting them where possible (`npm audit fix`, or an upgrade). When an advisory cannot be fixed in the current PR, add an entry to `audit-allowlist.json` with the advisory `id` (GHSA), `package`, `severity`, a `reason`, and the tracking `issue`. The check matches on advisory id and package together, and prints entries whose advisory no longer appears as stale so they can be removed. Never allowlist an advisory without a tracking issue.
+Fix advisories rather than allowlisting them where possible (`npm audit fix`, or an upgrade). When an advisory cannot be fixed in the current PR, add an entry to `.audit-allowlist.json` with the advisory `id` (GHSA), `package`, `severity`, a `reason`, the tracking `issue`, and an `expires` date (`YYYY-MM-DD`). The check matches on advisory id and package together, fails once an entry is past its expiry date, and prints entries whose advisory no longer appears as stale so they can be removed. Never allowlist an advisory without a tracking issue; extend an expiry only with a reason in the PR.
 
 ## Definition of done
 

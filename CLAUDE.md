@@ -26,7 +26,7 @@ Unit tests use `vitest` with mocked SSH — no real server needed.
 
 ## CI checks
 
-`.github/workflows/ci.yml` runs on every PR and on pushes to `main`, using the Node version in `.nvmrc` (23): `npm ci`, `npm test`, and `npm run audit:check`. The audit check fails on any high or critical `npm audit` advisory not listed, with a reason and tracking issue, in `audit-allowlist.json`. Run the same three commands locally before opening a PR. `tests/integration.js` is manual and is not run in CI. Details: [CONTRIBUTING.md](CONTRIBUTING.md#ci-checks).
+`.github/workflows/ci.yml` runs on every PR and on pushes to `main`, using the Node version in `.nvmrc` (23): `npm ci`, `npm test`, and `npm run audit:check`. The audit check fails on any high or critical `npm audit` advisory not listed, with a reason, tracking issue and expiry date, in `.audit-allowlist.json` (expired entries fail too). Secret scanning is not in CI yet (waits for the scanning ADR). Run the same three commands locally before opening a PR. `tests/integration.js` is manual and is not run in CI. Details: [CONTRIBUTING.md](CONTRIBUTING.md#ci-checks).
 
 ## Manual integration test
 
@@ -49,7 +49,7 @@ src/
   tools/read-file.js    read_file tool — read files within WordPress root
 
 scripts/
-  check-audit.js        npm audit gate with allowlist (audit-allowlist.json)
+  audit-check.mjs       npm audit gate with allowlist (.audit-allowlist.json)
 
 tests/
   config.test.js        Unit: registry validation
@@ -57,7 +57,7 @@ tests/
   executor.test.js      Unit: allowlist + timeout
   read-log.test.js      Unit: path resolution + output shape
   read-file.test.js     Unit: path confinement + traversal guard
-  check-audit.test.js   Unit: audit allowlist check
+  audit-check.test.js   Unit: audit allowlist check
   integration.js        Manual: end-to-end SSH against real server
 ```
 

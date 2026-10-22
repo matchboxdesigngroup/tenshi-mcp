@@ -7,7 +7,7 @@
     "start": "node src/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "audit:check": "node scripts/check-audit.js"
+    "audit:check": "node scripts/audit-check.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
