@@ -117,7 +117,7 @@ hook that blocks commits to `main` or edits to `.env` files.
 ### Fail-open (advisory)
 
 Use when false-positive rate is too high to block, or the hard gate lives
-elsewhere (for example CI, once it is added in M1).
+elsewhere (for example CI).
 
 - `set -euo pipefail`.
 - `exit 0` unconditionally at the end.

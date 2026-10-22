@@ -50,16 +50,33 @@ Risk rule: builders and reviewers of anything that decides who can read or do wh
 
 ## Testing
 
+Use the Node major in [`.nvmrc`](.nvmrc) (Node 23, matching the platform's local development guide), for example `nvm use`.
+
 ```bash
 npm ci
 npm test
+npm run audit:check
 ```
 
-Unit tests use vitest with mocked SSH; no real server is needed. CI is being added in milestone M1; until then run the tests locally before opening a PR.
+Unit tests use vitest with mocked SSH; no real server is needed. `tests/integration.js` is a manual script against a real server and is not run by `npm test` or CI.
+
+### CI checks
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request and on pushes to `main`, on the Node version in `.nvmrc`:
+
+1. `npm ci` (install from the lockfile)
+2. `npm test` (Vitest unit tests)
+3. `npm run audit:check` (`npm audit`; fails on any high or critical advisory that is not in [`audit-allowlist.json`](audit-allowlist.json))
+
+All three must pass before merge. Actions are pinned by commit SHA; the workflow uses no secrets and only reads the repository.
+
+### Audit allowlist
+
+Fix advisories rather than allowlisting them where possible (`npm audit fix`, or an upgrade). When an advisory cannot be fixed in the current PR, add an entry to `audit-allowlist.json` with the advisory `id` (GHSA), `package`, `severity`, a `reason`, and the tracking `issue`. The check matches on advisory id and package together, and prints entries whose advisory no longer appears as stale so they can be removed. Never allowlist an advisory without a tracking issue.
 
 ## Definition of done
 
-The PR is merged at the exact approved head with CI green, acceptance criteria verified, tests and sabotage table in place, and docs and changelog updated. (CI does not exist yet in this repo; this applies once it lands in M1.)
+The PR is merged at the exact approved head with CI green, acceptance criteria verified, tests and sabotage table in place, and docs and changelog updated.
 
 ## Code review and shell scripts
 
