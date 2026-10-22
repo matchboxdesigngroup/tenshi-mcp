@@ -34,7 +34,6 @@ export const AUDIT_ARGS = Object.freeze([
   '--json',
   '--offline=false',
   '--registry=https://registry.npmjs.org/',
-  '--include=dev',
   '--include=optional',
   '--include=peer',
 ]);
