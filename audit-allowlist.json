@@ -147,13 +147,6 @@
       "severity": "high",
       "reason": "Present on main when CI was added; dependency update tracked in #5",
       "issue": "#5"
-    },
-    {
-      "id": "GHSA-5xrq-8626-4rwp",
-      "package": "vitest",
-      "severity": "critical",
-      "reason": "Present on main when CI was added; dependency update tracked in #5",
-      "issue": "#5"
     }
   ]
 }

@@ -30,7 +30,7 @@ const entry = (pkg, id) => ({ id, package: pkg, reason: 'test', issue: '#0' });
 describe('collectAdvisories', () => {
   it('returns unique advisories and skips transitive references', () => {
     const ids = collectAdvisories(report).map((a) => a.id).sort();
-    expect(ids).toEqual(['GHSA-SABOTAGE', 'GHSA-bbbb-bbbb-bbbb', 'GHSA-mmmm-mmmm-mmmm']);
+    expect(ids).toEqual(['GHSA-aaaa-aaaa-aaaa', 'GHSA-bbbb-bbbb-bbbb', 'GHSA-mmmm-mmmm-mmmm']);
   });
 
   it('throws when npm audit returned an error instead of a report', () => {
