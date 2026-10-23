@@ -9,7 +9,7 @@ import { closeAll } from './ssh/client.js'
 loadRegistry()
 
 const server = new McpServer({
-  name: 'ssh-wp-tools',
+  name: 'tenshi-mcp',
   version: '1.0.0'
 })
 
