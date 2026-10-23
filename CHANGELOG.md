@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `tests/server.test.js`: starts the server over stdio with the SDK client and checks the reported server name, the tool names and the deprecated-variable warning (#11).
 - CI workflow (`.github/workflows/ci.yml`) on pull requests and pushes to `main`: `npm ci`, `npm test`, and an audit check, with actions pinned by commit SHA (#3).
 - `.nvmrc` pinning Node 23 for local development and CI, matching the platform local development guide (#3).
 - `npm run audit:check` (`scripts/audit-check.mjs`, Node built-ins only): runs `npm audit` online against the public registry with dev, optional and peer dependencies included regardless of `.npmrc`; fails on high or critical advisories not listed in `.audit-allowlist.json`, on advisories re-rated above their entry, on malformed, duplicate, expired or over-60-day entries, and on incomplete npm output; reports stale entries. Unit tests in `tests/audit-check.test.js` (#3).
@@ -16,5 +17,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Status note in `README.md` and `CLAUDE.md`: the tool layer is under security review.
 
 ### Changed
+- Renamed the project to Tenshi-MCP (tenshi#3, #11): package name `tenshi-mcp` (package.json and lockfile root), MCP server name reported over the protocol `tenshi-mcp` (was `ssh-wp-tools`), registration key `tenshi-mcp` in `.mcp.json` and the README and `CLAUDE.md` examples, README and `CLAUDE.md` titles, and the implementation plan renamed to `docs/specs/2026-06-04-tenshi-mcp-server.md`. Tool names `read_log` and `read_file` are unchanged. The registration key is client-side configuration that the server never reads, so an existing registration under the old key keeps starting the server; rename it to match the docs.
+- **Local configuration change (breaking in M5):** the registry path variable is now `TENSHI_MCP_SERVERS_PATH` (was `SSH_MCP_SERVERS_PATH`). The old name is still read as a deprecated fallback, see Deprecated. `.env.example` lists the new name and the old one only as a commented line.
+- Example site domains, server ids and absolute paths in docs, tool descriptions and `tests/integration.js` are neutral placeholders (`example.com`, `example-server`, `/path/to/tenshi-mcp`).
 - `CONTRIBUTING.md`, `CLAUDE.md`, and `docs/standards/` describe the CI checks and the audit allowlist; the "CI is being added" notes are removed (#3).
 - `docs/standards/git.md`, `code-review.md`, and `shell.md` now describe this Node MCP server and the shared conventions (they were copied from an unrelated project).
+
+### Deprecated
+- `SSH_MCP_SERVERS_PATH`: read only when `TENSHI_MCP_SERVERS_PATH` is unset or empty, with a one-line startup warning on stderr that names the variables and never their values; when both are set the new name wins and the warning says the old one is ignored. Removed in M5 (#11).
