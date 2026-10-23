@@ -192,12 +192,29 @@ describe('severity fallback', () => {
     }
   });
 
-  it('keeps an unknown severity when the same advisory also appears with a known one', () => {
-    const r = makeReport({
-      'pkg-x': { name: 'pkg-x', via: [advisory('pkg-x', 'GHSA-xxxx-xxxx-xxxx', 'weird'), advisory('pkg-x', 'GHSA-xxxx-xxxx-xxxx', 'critical')] },
-    });
-    const result = evaluate(r, { advisories: [entry('pkg-x', 'GHSA-xxxx-xxxx-xxxx', 'critical')] }, 'high', TODAY);
-    expect(result.unknown.map((a) => a.severity)).toEqual(['weird']);
+  it('keeps an unknown severity when the same advisory also appears with a known one, in either order', () => {
+    const orders = [
+      ['weird', 'critical'],
+      ['critical', 'weird'],
+      ['weird', 'high'],
+      ['high', 'weird'],
+      [undefined, 'high'],
+      ['high', undefined],
+    ];
+    for (const severities of orders) {
+      const via = severities.map((s) => advisory('pkg-x', 'GHSA-xxxx-xxxx-xxxx', s));
+      const r = makeReport({ 'pkg-x': { name: 'pkg-x', via } });
+      for (const allowed of ['high', 'critical']) {
+        const label = `${severities.join(' then ')} vs entry ${allowed}`;
+        const allowlist = { advisories: [entry('pkg-x', 'GHSA-xxxx-xxxx-xxxx', allowed)] };
+        const result = evaluate(r, allowlist, 'high', TODAY);
+        expect(result.unknown.map((a) => a.id), label).toEqual(['GHSA-xxxx-xxxx-xxxx']);
+        expect(result.allowlisted, label).toEqual([]);
+        expect(result.rerated, label).toEqual([]);
+        const code = main(['--allowlist', writeTemp(allowlist)], { ...quiet, run: () => ({ status: 1, stdout: JSON.stringify(r) }) });
+        expect(code, label).toBe(1);
+      }
+    }
   });
 });
 
@@ -235,10 +252,35 @@ describe('evaluate', () => {
     expect(code).toBe(1);
   });
 
-  it('keeps allowing an advisory re-rated downwards (critical entry, high report)', () => {
-    const allowlist = { advisories: [entry('pkg-b', 'GHSA-bbbb-bbbb-bbbb', 'critical')] };
+  it('fails an allowlisted advisory that was re-rated from critical to high (critical entry, high report)', () => {
+    const allowlist = {
+      advisories: [entry('pkg-a', 'GHSA-aaaa-aaaa-aaaa', 'critical'), entry('pkg-b', 'GHSA-bbbb-bbbb-bbbb', 'critical')],
+    };
     const result = evaluate(report, allowlist, 'high', TODAY);
-    expect(result.allowlisted.map((a) => a.id)).toEqual(['GHSA-bbbb-bbbb-bbbb']);
+    expect(result.rerated.map((a) => [a.id, a.severity, a.allowed])).toEqual([['GHSA-bbbb-bbbb-bbbb', 'high', 'critical']]);
+    expect(result.allowlisted.map((a) => a.id)).toEqual(['GHSA-aaaa-aaaa-aaaa']);
+    const errors = [];
+    const code = main(['--allowlist', writeTemp(allowlist)], {
+      ...quiet,
+      run: () => ({ status: 1, stdout: JSON.stringify(report) }),
+      error: (m) => errors.push(m),
+    });
+    expect(code).toBe(1);
+    expect(errors.join('\n')).toMatch(/now rated differently from their entry \(1\)/);
+    expect(errors.join('\n')).toMatch(/high\s+pkg-b GHSA-bbbb-bbbb-bbbb \(allowlisted as critical\)/);
+  });
+
+  it('does not let an all-critical allowlist cover high advisories', () => {
+    const r = makeReport({
+      'pkg-b': { name: 'pkg-b', via: [advisory('pkg-b', 'GHSA-bbbb-bbbb-bbbb', 'high')] },
+      'pkg-d': { name: 'pkg-d', via: [advisory('pkg-d', 'GHSA-dddd-dddd-dddd', 'high')] },
+    });
+    const allowlist = {
+      advisories: [entry('pkg-b', 'GHSA-bbbb-bbbb-bbbb', 'critical'), entry('pkg-d', 'GHSA-dddd-dddd-dddd', 'critical')],
+    };
+    const result = evaluate(r, allowlist, 'high', TODAY);
+    expect(result.rerated.map((a) => a.id)).toEqual(['GHSA-bbbb-bbbb-bbbb', 'GHSA-dddd-dddd-dddd']);
+    expect(result.allowlisted).toEqual([]);
   });
 
   it('matches on advisory id and package together', () => {
@@ -590,6 +632,16 @@ describe('main with a stubbed npm on PATH', () => {
       expect(res.stderr).toMatch(/gone-pkg GHSA-zzzz-zzzz-zzzz/);
     });
   }
+
+  it('fails when an entry records a different severity than npm reports, in either direction', () => {
+    const [prod, dev] = LOCKED();
+    const up = project({ advisories: [{ ...prod, severity: 'critical' }, dev] });
+    expect(up.status, up.stderr).toBe(1);
+    expect(up.stderr).toMatch(/high\s+prod-pkg GHSA-pppp-pppp-pppp \(allowlisted as critical\)/);
+    const down = project({ advisories: [prod, { ...dev, severity: 'high' }] });
+    expect(down.status, down.stderr).toBe(1);
+    expect(down.stderr).toMatch(/critical\s+dev-pkg GHSA-dddd-dddd-dddd \(allowlisted as high\)/);
+  });
 
   it('fails when one locked-tree entry is removed from the allowlist', () => {
     const res = project({ advisories: [LOCKED()[0]] });

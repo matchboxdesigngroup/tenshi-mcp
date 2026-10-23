@@ -9,7 +9,8 @@
 //   - a high or critical advisory is reported that is not in .audit-allowlist.json,
 //   - an advisory is reported with an unknown or missing severity (these can never
 //     be allowlisted),
-//   - an allowlisted advisory is now rated more severe than its entry records,
+//   - an allowlisted advisory is now reported with a different severity than its
+//     entry records (re-rated up or down; the entry must be reviewed),
 //   - an allowlist entry is stale: npm no longer reports its advisory at high or
 //     critical. A stale entry would silently cover the advisory if it came back,
 //     and it is how an audit that saw too little of the tree shows up,
@@ -19,8 +20,10 @@
 //     without the expected shape (fails closed).
 // Output lists severity, package and advisory id only.
 //
-// Known limit: entries match on advisory id and package, so a new install path
+// Known limits: entries match on advisory id and package, so a new install path
 // to an already-allowlisted package and advisory is not reported separately.
+// Proxy and TLS settings (proxy, https-proxy, noproxy, strict-ssl, ca, cafile)
+// still come from npm config; see CONTRIBUTING.md.
 //
 // Usage: node scripts/audit-check.mjs [--allowlist <path>]
 // Exit codes: 0 pass; 1 unlisted, unknown-severity or re-rated advisories, or
@@ -136,6 +139,8 @@ export function collectAdvisories(report) {
       const key = `${id}|${name}`;
       const severity = typeof via.severity === 'string' ? via.severity : 'unknown';
       const prev = byKey.get(key);
+      // Keep the most severe report; an unknown severity always wins, whichever
+      // order the items come in, so a known one cannot mask it.
       if (!prev || severityRank(severity) > severityRank(prev.severity) || !isKnownSeverity(severity)) {
         byKey.set(key, { id, package: name, severity });
       }
@@ -214,7 +219,7 @@ export function evaluate(report, allowlist, level = 'high', today = undefined) {
     const entry = byKey.get(`${a.id}|${a.package}`);
     if (!isKnownSeverity(a.severity)) unknown.push(a);
     else if (!entry) blocking.push(a);
-    else if (severityRank(a.severity) > severityRank(entry.severity)) rerated.push({ ...a, allowed: entry.severity });
+    else if (a.severity !== entry.severity) rerated.push({ ...a, allowed: entry.severity });
     else allowlisted.push(a);
   }
   return { blocking, unknown, rerated, allowlisted, stale: entries.filter((e) => !present.has(`${e.id}|${e.package}`)) };
@@ -277,7 +282,7 @@ export function main(argv, { run = runNpmAudit, today, log = console.log, error 
     code = 1;
   }
   if (result.rerated.length > 0) {
-    error(`Allowlisted advisories now rated more severe than their entry (${result.rerated.length}):`);
+    error(`Allowlisted advisories now rated differently from their entry (${result.rerated.length}); review and update the entry:`);
     result.rerated.forEach((a) => error(`${format(a)} (allowlisted as ${a.allowed})`));
     code = 1;
   }
