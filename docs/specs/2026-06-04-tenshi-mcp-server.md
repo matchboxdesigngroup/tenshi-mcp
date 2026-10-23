@@ -2,6 +2,8 @@
 
 > **Rename note:** this plan was written before the project was renamed to Tenshi-MCP (tenshi#3). Package, server and registration names, the registry path variable (`TENSHI_MCP_SERVERS_PATH`, formerly `SSH_MCP_SERVERS_PATH`, still read as a deprecated fallback) and example paths are updated to the current names. The code samples show the plan, not the current code: see `src/config/servers.js` for how the path is resolved now.
 
+> **SFTP note:** Tasks 4 to 6 describe the original command executor (`src/ssh/executor.js`, `runCommand`) and tools that built remote command strings. That design was replaced: the executor is removed and both tools read over SFTP through a read-only facade (`src/ssh/sftp.js`, `src/ssh/confine.js`). The code samples in those tasks are historical; see the README security model and the note in `docs/adrs/ADR-002-command-security-model.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a local MCP server (stdio transport) that SSHs into configured servers and exposes two tools — `read_log` and `read_file` — for reading WordPress logs and files during Claude triage sessions.

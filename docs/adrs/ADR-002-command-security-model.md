@@ -1,7 +1,9 @@
 # ADR-002: Three-Layer Security Model for Production SSH Access
 
 **Date:** 2026-06-04  
-**Status:** Accepted
+**Status:** Accepted; superseded in part (command construction)
+
+> **Superseded in part.** The command allowlist (Layer 2) and the `execCommand` trade-off below no longer describe the code. The tools now read over SFTP only: `src/ssh/executor.js` and `runCommand` were removed, no tool opens an exec or shell channel or builds a command string, and remote access goes through the read-only facade in `src/ssh/sftp.js`. The replacement model is decided in the platform ADR on tool-layer remote access, kept in the private platform repository; the README security model describes what the code does now. Layer 1 (registry allowlist) still applies. Layer 3 (path confinement) still applies and is stronger: paths are also resolved on the server with SFTP `realpath` and compared to the canonical root by path segment, and log files get the same checks. The "write commands are impossible by design" consequence below described the command allowlist; the tools issue no write requests, but the SSH account's own rights are set on the server, not by this code. The text below is kept as the original record.
 
 ## Context
 
