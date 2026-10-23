@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import { writeFileSync, mkdirSync, rmSync } from 'fs'
+import { writeFileSync, mkdirSync, rmSync, readFileSync } from 'fs'
 import path from 'path'
 import os from 'os'
+import { VECTORS, fingerprintOfByte } from './helpers/host-key-vectors.js'
 
 // envVar: which variable carries the registry path. The other one is cleared
 // so a value from the developer's shell cannot change the outcome.
@@ -29,10 +30,11 @@ const VALID_CONFIG = {
     {
       id: 'testserver',
       label: 'Test Server',
-      host: '1.2.3.4',
+      host: '192.0.2.10',
       port: 22,
       user: 'deploy',
       privateKeyPath: '~/.ssh/id_rsa',
+      hostKeys: [VECTORS.ed25519.fingerprint],
       sites: {
         'example.com': {
           wordpressRoot: '/var/www/example.com/public',
@@ -48,7 +50,7 @@ describe('getServerConfig', () => {
     await withServersFile(VALID_CONFIG, async ({ loadRegistry, getServerConfig }) => {
       loadRegistry()
       const server = getServerConfig('testserver')
-      expect(server.host).toBe('1.2.3.4')
+      expect(server.host).toBe('192.0.2.10')
       expect(server.user).toBe('deploy')
     })
   })
@@ -90,6 +92,117 @@ describe('loadRegistry validation', () => {
     const bad = { servers: [{ id: 'x' }] }
     await withServersFile(bad, async ({ loadRegistry }) => {
       expect(() => loadRegistry()).toThrow()
+    })
+  })
+})
+
+function withHostKeys(hostKeys, { id = 'testserver', omit = false } = {}) {
+  const server = { ...VALID_CONFIG.servers[0], id }
+  if (omit) delete server.hostKeys
+  else server.hostKeys = hostKeys
+  return { servers: [server] }
+}
+
+async function loadError(config) {
+  return withServersFile(config, async ({ loadRegistry, getServerConfig, RegistryError }) => {
+    let err
+    try { loadRegistry() } catch (e) { err = e }
+    expect(err, 'registry must refuse to load').toBeInstanceOf(RegistryError)
+    // Nothing is reachable after a refused load.
+    expect(() => getServerConfig(config.servers?.[0]?.id ?? 'testserver')).toThrow('Registry not initialized')
+    return err
+  })
+}
+
+const ED = VECTORS.ed25519.fingerprint
+const ED_BODY = ED.slice('SHA256:'.length)
+const ED_HEX = Buffer.from(ED_BODY, 'base64').toString('hex')
+
+describe('loadRegistry host-key pins', () => {
+  const invalid = {
+    'missing field': [undefined, { omit: true }],
+    'null': [null],
+    'a string instead of an array': [ED],
+    'empty array': [[]],
+    'more than five pins': [[1, 2, 3, 4, 5, 6].map(fingerprintOfByte)],
+    'duplicate pins': [[ED, ED]],
+    'duplicates after normalising the padding': [[ED, ED + '=']],
+    'a non-string pin': [[ED, 42]],
+    'a null pin': [[null]],
+    'an object pin': [[{ sha256: ED }]],
+    'lowercase hex': [[ED_HEX]],
+    'uppercase hex': [[ED_HEX.toUpperCase()]],
+    'hex after the SHA256 prefix': [['SHA256:' + ED_HEX]],
+    'double base64 padding': [[ED + '==']],
+    'base64url alphabet': [['SHA256:' + Buffer.alloc(32, 0xfb).toString('base64url')]],
+    'lowercase prefix': [['sha256:' + ED_BODY]],
+    'a SHA1 fingerprint': [['SHA1:' + Buffer.alloc(20, 7).toString('base64').replace(/=+$/, '')]],
+    'an MD5 fingerprint': [['MD5:' + Array.from({ length: 16 }, () => 'ab').join(':')]],
+    'a bare MD5 colon-hex fingerprint': [[Array.from({ length: 16 }, () => 'cd').join(':')]],
+    'one valid and one invalid pin': [[ED, 'SHA256:not-a-fingerprint']]
+  }
+
+  for (const [name, [hostKeys, options]] of Object.entries(invalid)) {
+    it(`refuses to load a server with ${name}, naming the server and the field`, async () => {
+      const err = await loadError(withHostKeys(hostKeys, options))
+      expect(err.message).toContain('server "testserver"')
+      expect(err.message).toContain('hostKeys')
+    })
+  }
+
+  it('never puts a pin value into the error message', async () => {
+    const values = ['SHA256:' + ED_HEX, ED + '==', 'sha256:' + ED_BODY, 'MD5:' + Array.from({ length: 16 }, () => 'ab').join(':')]
+    for (const value of values) {
+      const err = await loadError(withHostKeys([ED, value]))
+      expect(err.message).not.toContain(value)
+      expect(err.message).not.toContain(ED_BODY)
+    }
+    const dup = await loadError(withHostKeys([ED, ED]))
+    expect(dup.message).toContain('duplicate')
+    expect(dup.message).not.toContain(ED_BODY)
+  })
+
+  it('names a server without a usable id by its position', async () => {
+    const err = await loadError(withHostKeys([], { id: '' }))
+    expect(err.message).toContain('servers[0]')
+  })
+
+  it('refuses the whole registry when one of several servers has no pins', async () => {
+    const good = { ...VALID_CONFIG.servers[0], id: 'good-server' }
+    const bad = { ...VALID_CONFIG.servers[0], id: 'unpinned-server', sites: {} }
+    delete bad.hostKeys
+    const err = await loadError({ servers: [good, bad] })
+    expect(err.message).toContain('server "unpinned-server"')
+    expect(err.message).not.toContain('good-server')
+  })
+
+  it('empties a previously loaded registry when a reload fails', async () => {
+    await withServersFile(VALID_CONFIG, async ({ loadRegistry, getServerConfig }) => {
+      loadRegistry()
+      expect(getServerConfig('testserver').hostKeys).toEqual([ED])
+      writeFileSync(process.env.TENSHI_MCP_SERVERS_PATH, JSON.stringify(withHostKeys([])))
+      expect(() => loadRegistry()).toThrow()
+      expect(() => getServerConfig('testserver')).toThrow('Registry not initialized')
+    })
+  })
+
+  it('accepts one to five pins and stores them in the unpadded OpenSSH form', async () => {
+    const five = [ED + '=', ...[1, 2, 3, 4].map(fingerprintOfByte)]
+    await withServersFile(withHostKeys(five), async ({ loadRegistry, getServerConfig }) => {
+      loadRegistry()
+      expect(getServerConfig('testserver').hostKeys).toEqual([ED, ...[1, 2, 3, 4].map(fingerprintOfByte)])
+    })
+    await withServersFile(withHostKeys([VECTORS.ecdsa.fingerprint]), async ({ loadRegistry, getServerConfig }) => {
+      loadRegistry()
+      expect(getServerConfig('testserver').hostKeys).toEqual([VECTORS.ecdsa.fingerprint])
+    })
+  })
+
+  it('loads servers.json.example (placeholder pins are well formed)', async () => {
+    const example = JSON.parse(readFileSync(new URL('../servers.json.example', import.meta.url), 'utf8'))
+    await withServersFile(example, async ({ loadRegistry, getServerConfig }) => {
+      loadRegistry()
+      expect(getServerConfig('example-server').hostKeys).toHaveLength(1)
     })
   })
 })
@@ -181,7 +294,7 @@ describe('resolveServersPath (TENSHI_MCP_SERVERS_PATH with deprecated SSH_MCP_SE
     try {
       await withServersFile(VALID_CONFIG, async ({ loadRegistry, getServerConfig }) => {
         loadRegistry()
-        expect(getServerConfig('testserver').host).toBe('1.2.3.4')
+        expect(getServerConfig('testserver').host).toBe('192.0.2.10')
       }, 'SSH_MCP_SERVERS_PATH')
       expect(warn).toHaveBeenCalledTimes(1)
     } finally {

@@ -5,13 +5,16 @@ import { ZodError } from 'zod'
  * input, server paths or remote error text: the message is chosen from this
  * table only. Unknown site, path outside the root, missing file and
  * permission denied all share E_NOT_AVAILABLE, so a caller cannot tell them
- * apart from the output.
+ * apart from the output. E_HOST_KEY means the server presented a host key
+ * that matches none of its registry pins; it never says which key was
+ * expected or received.
  */
 export const ERROR_CODES = Object.freeze({
   INVALID_INPUT: 'E_INVALID_INPUT',
   NOT_AVAILABLE: 'E_NOT_AVAILABLE',
   TIMEOUT: 'E_TIMEOUT',
   REMOTE: 'E_REMOTE',
+  HOST_KEY: 'E_HOST_KEY',
   INTERNAL: 'E_INTERNAL'
 })
 
@@ -20,6 +23,7 @@ const MESSAGES = Object.freeze({
   E_NOT_AVAILABLE: 'The requested resource is not available.',
   E_TIMEOUT: 'The operation timed out.',
   E_REMOTE: 'The remote server could not complete the request.',
+  E_HOST_KEY: 'The server host key did not match the registry; the connection was refused.',
   E_INTERNAL: 'The tool failed unexpectedly.'
 })
 

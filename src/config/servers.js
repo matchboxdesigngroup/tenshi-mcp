@@ -1,11 +1,34 @@
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { z } from 'zod'
+import { MAX_HOST_KEYS, normaliseFingerprint } from '../ssh/host-key.js'
 
 const SiteSchema = z.object({
   wordpressRoot: z.string().min(1),
   logDir: z.string().min(1)
 })
+
+// Issue messages are fixed text: they never contain the rejected value.
+const HostKeysSchema = z.array(z.string(), {
+  required_error: 'host-key pins are required (at least one SHA-256 fingerprint)',
+  invalid_type_error: 'must be an array of SHA-256 fingerprints'
+})
+  .min(1, 'at least one SHA-256 fingerprint is required')
+  .max(MAX_HOST_KEYS, `at most ${MAX_HOST_KEYS} fingerprints are allowed`)
+  .transform((keys, ctx) => {
+    const normalised = keys.map(normaliseFingerprint)
+    const seen = new Set()
+    normalised.forEach((key, i) => {
+      if (key === undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [i], message: 'not a SHA-256 fingerprint in the OpenSSH form SHA256:<base64>' })
+      } else if (seen.has(key)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: [i], message: 'duplicate fingerprint' })
+      } else {
+        seen.add(key)
+      }
+    })
+    return normalised
+  })
 
 const ServerSchema = z.object({
   id: z.string().min(1),
@@ -14,12 +37,45 @@ const ServerSchema = z.object({
   port: z.number().int().min(1).max(65535),
   user: z.string().min(1),
   privateKeyPath: z.string().min(1),
+  hostKeys: HostKeysSchema,
   sites: z.record(SiteSchema)
 })
 
 const RegistrySchema = z.object({
   servers: z.array(ServerSchema).min(1)
 }).strict()
+
+/**
+ * The registry file failed validation. The message names the server (by id
+ * when it has a usable one, otherwise by position) and the field, never the
+ * rejected value.
+ */
+export class RegistryError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'RegistryError'
+  }
+}
+
+/** Label for the server at `index` in the raw file: its id, else its position. */
+function serverLabel(raw, index) {
+  const id = raw?.servers?.[index]?.id
+  return typeof id === 'string' && id !== '' && id.length <= 100 && !/[\u0000-\u001f\u007f]/.test(id)
+    ? `server "${id}"`
+    : `servers[${index}]`
+}
+
+/** @param {unknown} raw @param {z.ZodError} error */
+function describeIssues(raw, error) {
+  return error.issues.map(issue => {
+    const [top, index, ...rest] = issue.path
+    if (top === 'servers' && typeof index === 'number') {
+      const field = rest.length ? rest.join('.') : '(entry)'
+      return `${serverLabel(raw, index)}: ${field}: ${issue.message}`
+    }
+    return `${issue.path.join('.') || '(root)'}: ${issue.message}`
+  })
+}
 
 /** @type {Map<string, z.infer<typeof ServerSchema>>} */
 let registry = new Map()
@@ -66,11 +122,21 @@ export function resolveServersPath(env = process.env, warn = console.warn) {
   return resolve(DEFAULT_SERVERS_PATH)
 }
 
+/**
+ * Read and validate the registry. When any server is invalid, including a
+ * server without valid host-key pins, it throws RegistryError and the
+ * registry is left empty, also if an earlier load had succeeded: nothing is
+ * reachable until a valid registry loads (fail closed).
+ */
 export function loadRegistry() {
+  registry = new Map()
   const filePath = resolveServersPath()
   const raw = JSON.parse(readFileSync(filePath, 'utf8'))
-  const parsed = RegistrySchema.parse(raw)
-  registry = new Map(parsed.servers.map(s => [s.id, s]))
+  const result = RegistrySchema.safeParse(raw)
+  if (!result.success) {
+    throw new RegistryError(`Registry is invalid:\n  ${describeIssues(raw, result.error).join('\n  ')}`)
+  }
+  registry = new Map(result.data.servers.map(s => [s.id, s]))
 }
 
 /** @returns {z.infer<typeof ServerSchema>} */
