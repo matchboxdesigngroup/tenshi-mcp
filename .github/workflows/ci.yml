@@ -36,6 +36,8 @@ jobs:
         run: npm test
 
       # npm audit gate: fails on any high or critical advisory not listed in
-      # .audit-allowlist.json, and on any expired allowlist entry.
+      # .audit-allowlist.json, and on any expired or stale allowlist entry.
+      # Run with node directly, not `npm run`, so node_modules/.bin on PATH
+      # cannot shadow the npm the script spawns.
       - name: Audit (npm audit, high and critical)
-        run: npm run audit:check
+        run: node scripts/audit-check.mjs

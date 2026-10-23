@@ -66,7 +66,7 @@ Unit tests use vitest with mocked SSH; no real server is needed. `tests/integrat
 
 1. `npm ci` (install from the lockfile)
 2. `npm test` (Vitest unit tests)
-3. `npm run audit:check` (`npm audit`; fails on any high or critical advisory that is not in [`.audit-allowlist.json`](.audit-allowlist.json), and on any expired allowlist entry)
+3. `node scripts/audit-check.mjs` (the same check as `npm run audit:check`, run with `node` directly so nothing in `node_modules/.bin` can stand in for `npm`; fails on any high or critical advisory that is not in [`.audit-allowlist.json`](.audit-allowlist.json), and on any expired or stale allowlist entry)
 
 All three must pass before merge. Only the official `actions/checkout` and `actions/setup-node` actions are used, pinned by full commit SHA with the version tag in a comment; the workflow uses no secrets and only reads the repository. Secret scanning is not part of CI yet; it waits for the scanning-approach ADR in the platform repo.
 
@@ -76,9 +76,11 @@ Fix advisories rather than allowlisting them where possible (`npm audit fix`, or
 
 How the check behaves:
 
-- It runs `npm audit` with `--offline=false --registry=https://registry.npmjs.org/ --include=dev --include=optional --include=peer`, so offline mode, another registry, or `omit=dev` / `production` in `.npmrc` or the environment cannot hide advisories. It fails closed when npm returns an error or an incomplete report.
+- It runs `npm audit` with `--offline=false --registry=https://registry.npmjs.org/ --package-lock=true --include=prod --include=dev --include=optional --include=peer`, so offline mode, another registry, `package-lock=false` (which makes npm audit a freshly resolved tree instead of the lockfile), or `omit=dev` / `production` in `.npmrc` or the environment cannot hide advisories. It fails closed when npm cannot be started, returns an error (for an unreachable registry it prints npm's message), or returns an incomplete or unexpectedly shaped report.
 - An entry matches on advisory id and package together. If the advisory is re-rated above the entry's `severity` (for example high to critical), the check fails until the entry is reviewed.
-- It fails on any malformed, duplicated, expired, or over-long entry, and lists all of them at once. Entries whose advisory no longer appears are printed as stale so they can be removed.
+- An advisory reported with an unknown or missing severity always fails, even if its id and package are allowlisted.
+- It fails on any malformed, duplicated, expired, or over-long entry (`severity` must be exactly `high` or `critical`), and lists all of them at once.
+- It fails on stale entries: an entry whose advisory npm no longer reports at high or critical must be removed. A stale entry would silently cover the advisory if it came back, and a run that suddenly finds many stale entries usually means npm audited less than the locked tree.
 - Known limit: because entries match on advisory id and package, a new install path to an already-allowlisted package and advisory is not reported separately.
 
 ## Definition of done

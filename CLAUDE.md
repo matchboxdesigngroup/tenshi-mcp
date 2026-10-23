@@ -27,7 +27,7 @@ Unit tests use `vitest` with mocked SSH — no real server needed.
 
 ## CI checks
 
-`.github/workflows/ci.yml` runs on every PR and on pushes to `main`, using the Node version in `.nvmrc` (23): `npm ci`, `npm test`, and `npm run audit:check`. The audit check fails on any high or critical `npm audit` advisory not listed, with severity, reason, tracking issue and an expiry date at most 60 days ahead, in `.audit-allowlist.json` (expired, malformed or duplicate entries and advisories re-rated above their entry fail too; npm offline/omit-dev settings are overridden). Secret scanning is not in CI yet (waits for the scanning ADR). Run the same three commands locally before opening a PR. `tests/integration.js` is manual and is not run in CI. Details: [CONTRIBUTING.md](CONTRIBUTING.md#ci-checks).
+`.github/workflows/ci.yml` runs on every PR and on pushes to `main`, using the Node version in `.nvmrc` (23): `npm ci`, `npm test`, and `node scripts/audit-check.mjs` (locally also `npm run audit:check`). The audit check fails on any high or critical `npm audit` advisory not listed, with severity, reason, tracking issue and an expiry date at most 60 days ahead, in `.audit-allowlist.json` (expired, malformed, duplicate and stale entries, advisories re-rated above their entry and advisories with an unknown severity fail too; npm offline, omit-dev and `package-lock=false` settings are overridden so the lockfile tree is audited). Secret scanning is not in CI yet (waits for the scanning ADR). Run the same three commands locally before opening a PR. `tests/integration.js` is manual and is not run in CI. Details: [CONTRIBUTING.md](CONTRIBUTING.md#ci-checks).
 
 ## Manual integration test
 
