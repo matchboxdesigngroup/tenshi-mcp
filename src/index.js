@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { loadRegistry } from './config/servers.js'
-import { readLogHandler } from './tools/read-log.js'
+import { readLogHandler, LOG_NAMES, MAX_LINES, MAX_FILTER_LENGTH } from './tools/read-log.js'
 import { readFileHandler } from './tools/read-file.js'
 import { closeAll } from './ssh/client.js'
 
@@ -15,12 +15,12 @@ const server = new McpServer({
 
 server.tool(
   'read_log',
-  'Tail lines from a WordPress log file (debug/error/access) on a configured server',
+  'Return the last lines of a WordPress log (debug/error/access) for a configured site. Only the last 256 KB of the log are read and searched.',
   {
     site: z.string().describe('Site domain, e.g. example.com'),
-    log: z.enum(['debug', 'access', 'error']).describe('Log type'),
-    lines: z.number().int().min(1).max(500).default(50).describe('Number of lines to tail'),
-    filter: z.string().optional().describe('Optional grep filter string')
+    log: z.enum(LOG_NAMES).describe('Log type'),
+    lines: z.number().int().min(1).max(MAX_LINES).default(50).describe('Number of lines to return from the end of the log'),
+    filter: z.string().max(MAX_FILTER_LENGTH).optional().describe('Optional case-insensitive substring; every character is matched literally')
   },
   async ({ site, log, lines, filter }) => {
     try {
