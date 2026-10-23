@@ -3,19 +3,22 @@ import { writeFileSync, mkdirSync, rmSync } from 'fs'
 import path from 'path'
 import os from 'os'
 
-async function withServersFile(data, fn) {
+// envVar: which variable carries the registry path. The other one is cleared
+// so a value from the developer's shell cannot change the outcome.
+async function withServersFile(data, fn, envVar = 'TENSHI_MCP_SERVERS_PATH') {
   const dir = path.join(os.tmpdir(), `mcp-test-${Date.now()}`)
   mkdirSync(dir, { recursive: true })
   const filePath = path.join(dir, 'servers.json')
   writeFileSync(filePath, JSON.stringify(data))
-  const original = process.env.SSH_MCP_SERVERS_PATH
-  process.env.SSH_MCP_SERVERS_PATH = filePath
+  vi.stubEnv('TENSHI_MCP_SERVERS_PATH', '')
+  vi.stubEnv('SSH_MCP_SERVERS_PATH', '')
+  vi.stubEnv(envVar, filePath)
   try {
     vi.resetModules()
     const mod = await import('../src/config/servers.js')
     return await fn(mod)
   } finally {
-    process.env.SSH_MCP_SERVERS_PATH = original ?? ''
+    vi.unstubAllEnvs()
     rmSync(dir, { recursive: true })
     vi.resetModules()
   }
@@ -88,5 +91,73 @@ describe('loadRegistry validation', () => {
     await withServersFile(bad, async ({ loadRegistry }) => {
       expect(() => loadRegistry()).toThrow()
     })
+  })
+})
+
+describe('resolveServersPath (TENSHI_MCP_SERVERS_PATH with deprecated SSH_MCP_SERVERS_PATH fallback)', () => {
+  const NEW = '/path/to/new/servers.json'
+  const OLD = '/path/to/old/servers.json'
+
+  async function resolveWith(env) {
+    const { resolveServersPath } = await import('../src/config/servers.js')
+    const warnings = []
+    const result = resolveServersPath(env, msg => warnings.push(msg))
+    return { result, warnings }
+  }
+
+  it('uses TENSHI_MCP_SERVERS_PATH when only the new name is set, without a warning', async () => {
+    const { result, warnings } = await resolveWith({ TENSHI_MCP_SERVERS_PATH: NEW })
+    expect(result).toBe(path.resolve(NEW))
+    expect(warnings).toEqual([])
+  })
+
+  it('falls back to SSH_MCP_SERVERS_PATH when only the old name is set, with one warning', async () => {
+    const { result, warnings } = await resolveWith({ SSH_MCP_SERVERS_PATH: OLD })
+    expect(result).toBe(path.resolve(OLD))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('SSH_MCP_SERVERS_PATH')
+    expect(warnings[0]).toContain('TENSHI_MCP_SERVERS_PATH')
+    expect(warnings[0]).toContain('M5')
+  })
+
+  it('prefers the new name when both are set, and warns that the old one is ignored', async () => {
+    const { result, warnings } = await resolveWith({ TENSHI_MCP_SERVERS_PATH: NEW, SSH_MCP_SERVERS_PATH: OLD })
+    expect(result).toBe(path.resolve(NEW))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('ignored')
+  })
+
+  it('treats an empty new name as unset and falls back to the old name', async () => {
+    const { result } = await resolveWith({ TENSHI_MCP_SERVERS_PATH: '', SSH_MCP_SERVERS_PATH: OLD })
+    expect(result).toBe(path.resolve(OLD))
+  })
+
+  it('defaults to ./servers.json when neither is set, without a warning', async () => {
+    const { result, warnings } = await resolveWith({})
+    expect(result).toBe(path.resolve('./servers.json'))
+    expect(warnings).toEqual([])
+  })
+
+  it('never puts the variable values in the warning', async () => {
+    const { warnings } = await resolveWith({ TENSHI_MCP_SERVERS_PATH: NEW, SSH_MCP_SERVERS_PATH: OLD })
+    const { warnings: oldOnly } = await resolveWith({ SSH_MCP_SERVERS_PATH: OLD })
+    for (const w of [...warnings, ...oldOnly]) {
+      expect(w).not.toContain(NEW)
+      expect(w).not.toContain(OLD)
+      expect(w).not.toContain('\n')
+    }
+  })
+
+  it('loadRegistry reads the registry through the deprecated name', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await withServersFile(VALID_CONFIG, async ({ loadRegistry, getServerConfig }) => {
+        loadRegistry()
+        expect(getServerConfig('testserver').host).toBe('1.2.3.4')
+      }, 'SSH_MCP_SERVERS_PATH')
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

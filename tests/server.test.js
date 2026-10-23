@@ -18,7 +18,8 @@ let serversPath
 
 beforeAll(() => {
   tmpDir = mkdtempSync(path.join(os.tmpdir(), 'tenshi-mcp-server-test-'))
-  serversPath = path.join(tmpDir, 'servers.json')
+  // Not named servers.json, so the ./servers.json default cannot pick it up.
+  serversPath = path.join(tmpDir, 'registry.json')
   copyFileSync(path.join(repoRoot, 'servers.json.example'), serversPath)
 })
 
@@ -48,11 +49,27 @@ async function connect(env) {
 
 describe('MCP server over stdio', () => {
   it('reports the server name tenshi-mcp and keeps the tool names', async () => {
-    const { client } = await connect({ SSH_MCP_SERVERS_PATH: serversPath })
+    const { client, getStderr } = await connect({ TENSHI_MCP_SERVERS_PATH: serversPath })
     try {
       expect(client.getServerVersion()?.name).toBe('tenshi-mcp')
       const { tools } = await client.listTools()
       expect(tools.map(t => t.name).sort()).toEqual(['read_file', 'read_log'])
+      expect(getStderr()).not.toContain('SSH_MCP_SERVERS_PATH')
+    } finally {
+      await client.close()
+    }
+  }, 20000)
+
+  it('starts with only the deprecated SSH_MCP_SERVERS_PATH and warns on stderr', async () => {
+    const { client, getStderr } = await connect({ SSH_MCP_SERVERS_PATH: serversPath })
+    try {
+      expect(client.getServerVersion()?.name).toBe('tenshi-mcp')
+      const { tools } = await client.listTools()
+      expect(tools.map(t => t.name).sort()).toEqual(['read_file', 'read_log'])
+      const stderr = getStderr()
+      expect(stderr).toContain('SSH_MCP_SERVERS_PATH is deprecated')
+      expect(stderr).toContain('TENSHI_MCP_SERVERS_PATH')
+      expect(stderr).not.toContain(serversPath)
     } finally {
       await client.close()
     }
