@@ -76,6 +76,7 @@ beforeAll(async () => {
 
       '/var/www/inside/public/wp-content/debug.log': { symlink: '../logs/debug.log' },
       '/var/www/inside/public/logs/debug.log': { content: 'inside root\n' },
+      '/var/log/sites/inside/inside.example.access.log': { content: 'SWAPPED-CONTENT\n', fstatType: 'fifo' },
 
       [CANARY]: { content: 'CANARY-SECRET\n' },
       [SIBLING_CANARY]: { content: 'CANARY-SIBLING\n' }
@@ -241,6 +242,16 @@ describe('read_log confinement and refusals', () => {
     const err = await failure({ site: 'escape.example', log: 'access', lines: 10 })
     expect(err.message).toBe(NOT_AVAILABLE)
     expect(fake.events.ops.filter(o => o.op === 'OPEN')).toEqual([])
+  })
+
+  it('refuses a log whose type on the open handle is not regular, closes the handle and reads nothing', async () => {
+    const err = await failure({ site: 'inside.example', log: 'access', lines: 10 })
+    expect(err.message).toBe(NOT_AVAILABLE)
+    const ops = fake.events.ops.map(o => o.op)
+    expect(ops).toContain('FSTAT')
+    expect(ops).not.toContain('READ')
+    expect(ops.at(-1)).toBe('CLOSE')
+    expect(fake.events.openHandles).toBe(0)
   })
 
   it('follows a symlink that stays inside the root', async () => {

@@ -39,6 +39,7 @@ beforeAll(async () => {
       [`${ROOT}/wp-content/loop-b`]: { symlink: 'loop-a' },
       [`${ROOT}/wp-content/endless.bin`]: { endless: true, size: 10 * 1024 * 1024 },
       [`${ROOT}/wp-content/slow.txt`]: { content: 'never served', hangRead: true },
+      [`${ROOT}/wp-content/type-change.txt`]: { content: 'SWAPPED-CONTENT', fstatType: 'fifo' },
 
       '/var/www/current': { symlink: '/var/www/releases/1' },
       '/var/www/releases/1/index.php': { content: '<?php // release 1' },
@@ -151,6 +152,18 @@ describe('read_file confinement', () => {
     const err = await failure({ site: 'example.com', path })
     expect(err.message).toBe(NOT_AVAILABLE)
     expect(fake.events.opens).toEqual([])
+  })
+
+  it('refuses a file whose type on the open handle is not regular, closes the handle and reads nothing', async () => {
+    const err = await failure({ site: 'example.com', path: 'wp-content/type-change.txt' })
+    expect(err.message).toBe(NOT_AVAILABLE)
+    const ops = fake.events.ops.map(o => o.op)
+    expect(ops).toContain('OPEN')
+    expect(ops).toContain('FSTAT')
+    expect(ops).not.toContain('READ')
+    expect(ops.at(-1)).toBe('CLOSE')
+    expect(fake.events.openHandles).toBe(0)
+    expect(JSON.stringify(err)).not.toContain('SWAPPED')
   })
 
   it.each([['wp-content'], ['wp-content/plugins'], ['wp-content/missing.php']])(

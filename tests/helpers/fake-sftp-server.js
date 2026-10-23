@@ -11,6 +11,9 @@
 //                                            return the full requested length
 //   { content, hangRead: true }              file whose READs never answer
 //   { hangRealpath: true }                   REALPATH on this path never answers
+//   { content, fstatType: 'fifo' }           STAT/LSTAT report a regular file,
+//                                            FSTAT on the open handle a FIFO
+//                                            (the type changed after the check)
 
 import { writeFileSync, mkdtempSync, rmSync, chmodSync } from 'fs'
 import { createServer } from 'net'
@@ -24,6 +27,7 @@ const { OPEN_MODE, STATUS_CODE } = utils.sftp
 const S_IFREG = 0o100000
 const S_IFDIR = 0o040000
 const S_IFLNK = 0o120000
+const S_IFIFO = 0o010000
 
 export const USERNAME = 'tenshi-test'
 
@@ -125,7 +129,8 @@ export async function startFakeSftpServer({ files }) {
     ops: [],               // { op, path? }
     opens: [],             // resolved paths opened for reading
     readBytesServed: 0,
-    pendingReads: 0
+    pendingReads: 0,
+    openHandles: 0          // handles opened and not yet closed with CLOSE
   }
 
   const clients = new Set()
@@ -181,6 +186,7 @@ export async function startFakeSftpServer({ files }) {
       if (!node) return sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE)
       if (node.dir) return sftp.status(reqid, STATUS_CODE.FAILURE)
       events.opens.push(resolved)
+      events.openHandles++
       const id = nextHandle++
       handles.set(id, { path: resolved, node })
       const handle = Buffer.alloc(4)
@@ -194,7 +200,9 @@ export async function startFakeSftpServer({ files }) {
       record('FSTAT')
       const h = lookup(handle)
       if (!h) return sftp.status(reqid, STATUS_CODE.FAILURE)
-      sftp.attrs(reqid, fsTree.attrs(h.path, h.node))
+      const attrs = fsTree.attrs(h.path, h.node)
+      if (h.node.fstatType === 'fifo') attrs.mode = S_IFIFO | 0o644
+      sftp.attrs(reqid, attrs)
     })
 
     sftp.on('READ', (reqid, handle, offset, length) => {
@@ -218,6 +226,7 @@ export async function startFakeSftpServer({ files }) {
       const h = lookup(handle)
       if (!h) return sftp.status(reqid, STATUS_CODE.FAILURE)
       handles.delete(handle.readUInt32BE(0))
+      events.openHandles--
       sftp.status(reqid, STATUS_CODE.OK)
     })
 
@@ -301,6 +310,7 @@ export async function startFakeSftpServer({ files }) {
       events.opens.length = 0
       events.readBytesServed = 0
       events.pendingReads = 0
+      events.openHandles = 0
     },
     async close() {
       for (const c of clients) c.end()
