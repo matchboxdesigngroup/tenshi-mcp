@@ -17,7 +17,7 @@ Reviews catch bugs and keep the security model intact. They are not style debate
 
 ## Author Responsibilities
 
-- Run `npm test` locally and paste the result in the PR. CI (install, test, audit; see [CONTRIBUTING.md](../../CONTRIBUTING.md#ci-checks)) must also be green.
+- Run `npm test` locally and paste the result in the PR. CI (audit gate, then install and tests, in the job `Install, test, audit`; see [CONTRIBUTING.md](../../CONTRIBUTING.md#ci-checks)) must also be green.
 - Keep PRs focused; unrelated cleanup is a separate PR.
 - Respond to every comment: apply the change or explain why not.
 - Do not force-push, rebase, or amend after review has started; add commits instead.
