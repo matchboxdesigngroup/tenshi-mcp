@@ -49,6 +49,7 @@ beforeAll(async () => {
     port: sink.port,
     user: fake.username,
     privateKeyPath: fake.clientKeyPath,
+    hostKeys: [fake.hostKeyFingerprint],
     sites: {
       'unreachable.example': { wordpressRoot: ROOT, logDir: '/var/log/nginx' },
       // A registry key that would place the error and access logs outside

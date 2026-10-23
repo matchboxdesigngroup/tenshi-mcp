@@ -2,6 +2,7 @@ import { NodeSSH } from 'node-ssh'
 import { homedir } from 'os'
 import { getServerConfig } from '../config/servers.js'
 import { ERROR_CODES, ToolError } from '../errors.js'
+import { createHostVerifier } from './host-key.js'
 
 // Connection pool keyed by server id. The NodeSSH object never leaves this
 // module: the only export that touches it is openSftpChannel, which hands a
@@ -22,18 +23,19 @@ function expandHome(p) {
 }
 
 /**
- * Host-key verification seam. Returns the value for ssh2's `hostVerifier`
- * connect option, or undefined. Host-key pinning is a tracked follow-up and is
- * not implemented yet: until it lands this returns undefined and ssh2 keeps
- * its default of accepting the key the server presents, which is the
- * behaviour before the SFTP rework. The follow-up builds a verifier from
- * per-server pins in the registry that fails closed when a pin is missing.
+ * ssh2's `hostVerifier` for a registered server: accepts the host key only
+ * when its SHA-256 digest matches one of the server's `hostKeys` pins. It
+ * always returns a function, never undefined, because ssh2 accepts any host
+ * key when no verifier is set. A server without valid pins gets a verifier
+ * that rejects every key (fail closed). Used with `hostHash: 'sha256'`; ssh2
+ * calls it during key exchange, before any authentication is sent.
  *
- * @param {ReturnType<typeof getServerConfig>} _server
- * @returns {undefined | ((key: Buffer) => boolean)}
+ * @param {ReturnType<typeof getServerConfig>} server
+ * @param {() => void} [onReject] called on each rejection, with no details
+ * @returns {(hash: unknown) => boolean}
  */
-export function hostVerifierFor(_server) {
-  return undefined
+export function hostVerifierFor(server, onReject) {
+  return createHostVerifier(server?.hostKeys, onReject)
 }
 
 function drop(serverId, entry) {
@@ -47,17 +49,38 @@ function scheduleIdle(serverId, entry) {
   entry.timer = setTimeout(() => drop(serverId, entry), IDLE_MS)
 }
 
+/**
+ * Open and authenticate a new connection. Every call verifies the host key
+ * afresh, so a reconnect after the pool dropped a connection is checked
+ * like the first connection. A host key that matches no pin fails with the
+ * fixed E_HOST_KEY error, which carries no fingerprint, host or path; the
+ * mismatch is not logged (no log line may carry server details until the
+ * audit log exists).
+ */
 async function connect(server) {
   const ssh = new NodeSSH()
-  const hostVerifier = hostVerifierFor(server)
-  await ssh.connect({
-    host: server.host,
-    port: server.port,
-    username: server.user,
-    privateKeyPath: expandHome(server.privateKeyPath),
-    readyTimeout: READY_TIMEOUT_MS,
-    ...(hostVerifier ? { hostVerifier } : {})
-  })
+  let hostKeyRejected = false
+  const hostVerifier = hostVerifierFor(server, () => { hostKeyRejected = true })
+  try {
+    await ssh.connect({
+      host: server.host,
+      port: server.port,
+      username: server.user,
+      privateKeyPath: expandHome(server.privateKeyPath),
+      readyTimeout: READY_TIMEOUT_MS,
+      hostHash: 'sha256',
+      hostVerifier
+    })
+  } catch (err) {
+    ssh.dispose()
+    if (hostKeyRejected) throw new ToolError(ERROR_CODES.HOST_KEY)
+    throw err
+  }
+  if (hostKeyRejected) {
+    // ssh2 disconnects on a rejected key; never use a connection that got here.
+    ssh.dispose()
+    throw new ToolError(ERROR_CODES.HOST_KEY)
+  }
   return ssh
 }
 

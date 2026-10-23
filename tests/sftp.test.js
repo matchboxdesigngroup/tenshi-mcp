@@ -197,12 +197,12 @@ describe('per-call timeout', () => {
       servers: [
         {
           id: SERVER_ID, label: 'Fake', host: fake.host, port: fake.port,
-          user: fake.username, privateKeyPath: fake.clientKeyPath,
+          user: fake.username, privateKeyPath: fake.clientKeyPath, hostKeys: [fake.hostKeyFingerprint],
           sites: { 'example.com': { wordpressRoot: '/srv/data', logDir: '/srv/data' } }
         },
         {
           id: 'silent', label: 'Silent', host: '127.0.0.1', port: silent.address().port,
-          user: fake.username, privateKeyPath: fake.clientKeyPath, sites: {}
+          user: fake.username, privateKeyPath: fake.clientKeyPath, hostKeys: [fake.hostKeyFingerprint], sites: {}
         }
       ]
     }))

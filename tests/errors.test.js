@@ -6,6 +6,7 @@ describe('tool errors', () => {
   it('uses a fixed message per code', () => {
     expect(new ToolError(ERROR_CODES.NOT_AVAILABLE).message).toBe('E_NOT_AVAILABLE: The requested resource is not available.')
     expect(new ToolError(ERROR_CODES.TIMEOUT).message).toBe('E_TIMEOUT: The operation timed out.')
+    expect(new ToolError(ERROR_CODES.HOST_KEY).message).toBe('E_HOST_KEY: The server host key did not match the registry; the connection was refused.')
   })
 
   it('treats an unknown code as E_INTERNAL', () => {

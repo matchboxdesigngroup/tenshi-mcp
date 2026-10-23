@@ -46,10 +46,11 @@ Then edit `servers.json` with your real server details:
     {
       "id": "myserver",
       "label": "My Server",
-      "host": "1.2.3.4",
+      "host": "192.0.2.10",
       "port": 22,
       "user": "deploy",
       "privateKeyPath": "~/.ssh/id_rsa",
+      "hostKeys": ["SHA256:EXAMPLEonlyReplaceWithTheVerifiedHostKey000"],
       "sites": {
         "example.com": {
           "wordpressRoot": "/var/www/example.com/public",
@@ -71,11 +72,36 @@ Field reference:
 | `port` | SSH port (usually 22) |
 | `user` | SSH username |
 | `privateKeyPath` | Path to private key; `~` is expanded to your home directory |
+| `hostKeys` | Required. SHA-256 fingerprints of the server's SSH host key, in the form `ssh-keygen -lf` prints (`SHA256:` plus base64). One to five entries, no duplicates. See [Host-key pins](#host-key-pins) |
 | `sites` | Map of domain → paths. Keys are site domains (e.g. `example.com`) |
 | `wordpressRoot` | Absolute path to WordPress installation root on the server |
 | `logDir` | Directory where Nginx/Apache logs for this site live |
 
 Multiple servers and multiple sites per server are supported.
+
+#### Host-key pins
+
+Every server must list the SHA-256 fingerprints of its SSH host key in `hostKeys`. On every new connection, including a reconnect after a dropped or idle connection, the key the server presents is checked against these pins during the key exchange, before any authentication is sent. A key that matches no pin is refused with `E_HOST_KEY`. There is no trust on first use, no environment variable and no setting that turns the check off.
+
+The registry refuses to load, and the server does not start, if any server has no `hostKeys`, an empty list, more than five entries, a duplicate (after normalising), or an entry that is not in the `SHA256:<base64>` form. Hex digests and MD5 or SHA1 fingerprints are refused. The error names the server id and the field, never the value. The base64 part may carry its `=` padding or not; it is stored without.
+
+Record pins out of band, from a source you already trust, and add them through a reviewed change to your registry. The two commands below only read and print fingerprints. Tenshi-MCP never runs them.
+
+```bash
+# 1. Fingerprints of the keys the server presents on the network (not proof by itself)
+ssh-keyscan -p 22 192.0.2.10 2>/dev/null | ssh-keygen -lf -
+# 256 SHA256:... 192.0.2.10 (ED25519)
+
+# 2. The same fingerprints from a trusted channel: the hosting provider's console,
+#    or on the server itself through a console or session you already trust
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+```
+
+Pin a fingerprint only when steps 1 and 2 agree. `ssh-keyscan` alone trusts whatever answers at that address, so it is not verification. Use the key type the client negotiates. The SSH library (`ssh2`) prefers Ed25519, then ECDSA, then RSA, and uses the first of these that the server offers. If you are unsure, pin each verified host-key type the server offers. Each one counts toward the five entries.
+
+**Rotation:** before the server's host key changes, add the new fingerprint next to the old one (up to five entries), deploy that registry, rotate the key on the server, then remove the old fingerprint in a second change. While both are listed, either key is accepted.
+
+**Upgrading from a registry without pins:** the registry now refuses to load without `hostKeys`. Add the field to every server, with fingerprints obtained as above, before upgrading.
 
 **SpinupWP layout example:**
 
@@ -221,6 +247,7 @@ Tool failures return a fixed code and message, never the arguments, a server pat
 | `E_INVALID_INPUT` | The arguments failed validation inside the tool (for example a `path` over 1024 characters). Arguments that fail the MCP schema (for example an unknown `log` value) are rejected earlier by the MCP SDK with its own validation message. |
 | `E_TIMEOUT` | The call did not finish within 10 seconds; its SFTP channel was closed. |
 | `E_REMOTE` | The connection or the SFTP session failed. |
+| `E_HOST_KEY` | The server presented an SSH host key that matches none of its `hostKeys` pins. The connection was closed before authentication. The message never says which key was expected or received. |
 | `E_INTERNAL` | Unexpected failure inside the tool. |
 
 ---
@@ -230,6 +257,8 @@ Tool failures return a fixed code and message, never the arguments, a server pat
 The tools read over SFTP only. The design follows the platform ADR on tool-layer remote access (kept in the private platform repository); [ADR-002](docs/adrs/ADR-002-command-security-model.md) records the earlier command-based model, which is superseded in part.
 
 **Registry allowlist** (`src/config/servers.js`, `src/ssh/client.js`): only servers and sites defined in `servers.json` are reachable. Unknown sites are refused before any network activity.
+
+**Host-key pinning** (`src/ssh/host-key.js`, `src/ssh/client.js`): every connection, including each reconnect, passes `ssh2` a host verifier for that server's `hostKeys` pins (`hostHash: 'sha256'`). The verifier compares the presented key's digest with every pin in constant time, without stopping at the first mismatch, and rejects during the key exchange. A mismatch therefore sends no authentication request and opens no SFTP channel, and the call fails with the fixed `E_HOST_KEY`. A server without valid pins cannot be loaded, and the verifier would reject every key anyway. Mismatches are not logged: no log line carries fingerprints or host details until an audit log exists. See [Host-key pins](#host-key-pins).
 
 **No remote commands** (`src/ssh/sftp.js`): tools get a read-only session facade with exactly `realpath`, `lstat`, open for reading, `fstat`, bounded `read` and `close`. The facade never exposes the SSH connection, an exec or shell channel, or any SFTP write, rename or remove operation, and no tool builds a command string. `src/ssh/client.js` is the only module that uses the SSH library. The unit tests run every tool against an in-process SSH server that records requests and fail if it ever receives an exec, shell or other non-SFTP request.
 
@@ -243,7 +272,7 @@ The tools read over SFTP only. The design follows the platform ADR on tool-layer
 
 **Errors** are the fixed codes listed under [Errors](#errors).
 
-**Not covered yet:** the SFTP account's own rights are not narrowed by this server, so use a dedicated read-only account where you control the host. The checks run before the file is opened, and a file replaced between those checks and the open is not detected yet (the type is checked again on the open handle, the path is not). Further hardening (host-key pinning, a sensitive-file policy with redaction, an audit log) is in progress and tracked privately; until it lands, keep to the status note at the top of this file.
+**Not covered yet:** the SFTP account's own rights are not narrowed by this server, so use a dedicated read-only account where you control the host. The checks run before the file is opened, and a file replaced between those checks and the open is not detected yet (the type is checked again on the open handle, the path is not). Further hardening (a sensitive-file policy with redaction, an audit log) is in progress and tracked privately; until it lands, keep to the status note at the top of this file.
 
 ---
 
@@ -260,8 +289,10 @@ Tests use `vitest`. No real server is needed: the SFTP tests start an in-process
 
 | Test file | Covers |
 |---|---|
-| `tests/config.test.js` | Registry loading and Zod validation |
-| `tests/client.test.js` | Registry guard for SFTP channels, host-key verification seam |
+| `tests/config.test.js` | Registry loading and Zod validation, including `hostKeys` |
+| `tests/client.test.js` | Registry guard for SFTP channels, `hostVerifierFor` always returns a verifier |
+| `tests/host-key.test.js` | Fingerprint form and normalisation, constant-time comparison of every pin, verifier against fixed OpenSSH vectors |
+| `tests/host-key-pinning.test.js` | Pinning against the fake: matching pins, rotation, mismatch refused before authentication with no SFTP channel, unpinned registry refused, reconnect re-verified |
 | `tests/sftp.test.js` | Read-only session facade, per-call timeout, session close, read budget |
 | `tests/confine.test.js` | Lexical confinement and path-segment comparison |
 | `tests/read-log.test.js` | Log selection, tail window, line and byte caps, literal filter, confinement, timeout |
@@ -304,6 +335,7 @@ src/
   config/servers.js     Load + validate servers.json (Zod), lookup functions
   errors.js             Fixed error codes returned to the model
   ssh/client.js         Connection pool keyed by server ID, 5-min idle timeout, SFTP channels only
+  ssh/host-key.js       Host-key pins: fingerprint form, constant-time verifier
   ssh/sftp.js           Read-only SFTP session facade with a per-call deadline
   ssh/confine.js        Lexical and canonical (realpath) path confinement
   tools/site.js         Registry lookup for tool calls
@@ -312,8 +344,11 @@ src/
 
 tests/
   helpers/fake-sftp-server.js  In-process SSH/SFTP server fake (ssh2 server mode)
+  helpers/host-key-vectors.js  Fixed public keys with their ssh-keygen fingerprints
   config.test.js        Unit: registry validation
-  client.test.js        Unit: registry guard, host-key seam
+  client.test.js        Unit: registry guard, host verifier
+  host-key.test.js      Unit: pin form, constant-time comparison, verifier
+  host-key-pinning.test.js  Unit: host-key pinning against the fake
   sftp.test.js          Unit: session facade, timeout, session close
   confine.test.js       Unit: path confinement
   read-log.test.js      Unit: read_log against the fake
@@ -346,6 +381,12 @@ The server process failed to start. Check that `TENSHI_MCP_SERVERS_PATH` points 
 
 **`E_NOT_AVAILABLE`**  
 The site is not in `servers.json` (site keys are exact domain matches), or the path does not resolve to a regular file inside the allowed directory (`wordpressRoot` for `read_file` and the debug log, `logDir` for error and access logs), or the account cannot read it. The tool does not say which, by design. Use relative paths only (e.g. `wp-content/plugins/example/readme.txt`). A log file that is a symlink to a location outside its directory is refused.
+
+**`Registry is invalid: ... hostKeys: ...` at startup**  
+A server has no host-key pins or a pin in the wrong form. Add or fix `hostKeys` as described in [Host-key pins](#host-key-pins). The message names the server id and never the value.
+
+**`E_HOST_KEY`**  
+The server's host key matches none of its pins. Either the key was rotated without a registry change, the address now reaches a different machine, or someone is intercepting the connection. Do not just copy the new fingerprint from `ssh-keyscan`. Check it against the provider console or another trusted channel first, then add it through a reviewed change.
 
 **`E_TIMEOUT` or `E_REMOTE`**  
 The connection, the SFTP subsystem or a read failed or took longer than 10 seconds. Verify the host, port, user, and private key path in `servers.json`, and that SFTP is enabled for the account. Test manually: `sftp -i /path/to/key -P 22 deploy@192.0.2.10`.

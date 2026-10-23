@@ -28,6 +28,7 @@ Use [CLAUDE.md](../../CLAUDE.md) and the ADRs in [docs/adrs/](../adrs/) as the r
 
 ### Security model
 - [ ] Host access still limited to servers in the registry (`src/config/servers.js`, `src/ssh/client.js`).
+- [ ] Every connection still verifies the host key against the registry pins (`hostHash: 'sha256'` plus `hostVerifierFor` in `src/ssh/client.js`, on reconnects too). No trust on first use, no override or skip switch, and no fingerprint or host in errors or logs.
 - [ ] Remote access goes through the read-only SFTP facade (`src/ssh/sftp.js`) only: no exec, shell or write request, no command string, and no tool imports `src/ssh/client.js`, `node-ssh` or `ssh2`.
 - [ ] Paths read by any tool (including log paths) still confined: lexical check, SFTP realpath, path-segment comparison with the canonical root, regular file only; traversal and symlink cases tested against the fake server.
 - [ ] Output caps (line and byte limits) and the per-call timeout still enforced in this server, with the SFTP channel closed on timeout.

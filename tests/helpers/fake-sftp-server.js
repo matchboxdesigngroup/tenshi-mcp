@@ -17,8 +17,9 @@
 //                                            FSTAT on the open handle a FIFO
 //                                            (the type changed after the check)
 
+import { createHash } from 'crypto'
 import { writeFileSync, mkdtempSync, rmSync, chmodSync } from 'fs'
-import { createServer } from 'net'
+import { createServer, connect as connectTcp } from 'net'
 import { tmpdir } from 'os'
 import { join, posix } from 'path'
 import ssh2 from 'ssh2'
@@ -46,6 +47,18 @@ function generateUsableKeyPair() {
     }
   }
   throw new Error('could not generate a usable test key')
+}
+
+/**
+ * OpenSSH-style SHA-256 fingerprint (`SHA256:<unpadded base64>`) of a public
+ * key, computed here independently of src/ so a wrong formula in src/ cannot
+ * hide behind the same formula in the fake.
+ */
+export function opensshFingerprint(publicKey) {
+  const parsed = utils.parseKey(publicKey)
+  if (parsed instanceof Error) throw parsed
+  const digest = createHash('sha256').update(parsed.getPublicSSH()).digest('base64')
+  return 'SHA256:' + digest.replace(/=+$/, '')
 }
 
 class FakeFs {
@@ -134,7 +147,8 @@ export async function startFakeSftpServer({ files }) {
     opens: [],             // resolved paths opened for reading
     readBytesServed: 0,
     pendingReads: 0,
-    openHandles: 0          // handles opened and not yet closed with CLOSE
+    openHandles: 0,         // handles opened and not yet closed with CLOSE
+    authAttempts: 0         // authentication requests of any method, cumulative
   }
 
   const clients = new Set()
@@ -252,6 +266,7 @@ export async function startFakeSftpServer({ files }) {
     client.on('error', () => {})
     client.on('close', () => clients.delete(client))
     client.on('authentication', async ctx => {
+      events.authAttempts++
       if (ctx.username !== USERNAME || ctx.method !== 'publickey') return ctx.reject(['publickey'])
       if (authGate) await authGate
       ctx.accept()
@@ -289,6 +304,8 @@ export async function startFakeSftpServer({ files }) {
     username: USERNAME,
     clientKeyPath,
     clientPrivateKey: clientKey.private,
+    /** The fake's host-key fingerprint in the OpenSSH form, for registry pins. */
+    hostKeyFingerprint: opensshFingerprint(hostKey.public),
     events,
     /** Hold every authentication until the returned function is called. */
     holdAuthentication() {
@@ -298,6 +315,10 @@ export async function startFakeSftpServer({ files }) {
     },
     /** Count of SSH connections currently open. */
     openConnections: () => clients.size,
+    /** End every open SSH connection from the server side (the pool sees a drop). */
+    disconnectClients() {
+      for (const c of clients) c.end()
+    },
     /** Count of SFTP sessions currently open. */
     openSftpSessions: () => events.sftpSessionsOpened - events.sftpSessionsClosed,
     /** Resolve when the predicate holds, or reject after `ms`. */
@@ -328,33 +349,44 @@ export async function startFakeSftpServer({ files }) {
 
 /**
  * Write a registry pointing at the fake, load it through the real loader and
- * return the env restore function.
+ * return the env restore function. The server is pinned to the fake's host
+ * key unless `options.hostKeys` is given; `options.host` and `options.port`
+ * point it somewhere else (for example a forwarder in front of the fake).
  * @param {Awaited<ReturnType<typeof startFakeSftpServer>>} fake
  * @param {Record<string, { wordpressRoot: string, logDir: string }>} sites
+ * @param {{ hostKeys?: string[], host?: string, port?: number }} [options]
  */
-export async function loadFakeRegistry(fake, sites, serverId = 'fake-server', extraServers = []) {
+export async function loadFakeRegistry(fake, sites, serverId = 'fake-server', extraServers = [], options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'tenshi-mcp-registry-'))
   const registryPath = join(dir, 'registry.json')
   writeFileSync(registryPath, JSON.stringify({
     servers: [{
       id: serverId,
       label: 'Fake server',
-      host: fake.host,
-      port: fake.port,
+      host: options.host ?? fake.host,
+      port: options.port ?? fake.port,
       user: fake.username,
       privateKeyPath: fake.clientKeyPath,
+      hostKeys: options.hostKeys ?? [fake.hostKeyFingerprint],
       sites
     }, ...extraServers]
   }))
   const previous = process.env.TENSHI_MCP_SERVERS_PATH
   process.env.TENSHI_MCP_SERVERS_PATH = registryPath
-  const { loadRegistry } = await import('../../src/config/servers.js')
-  loadRegistry()
-  return () => {
+  const restore = () => {
     if (previous === undefined) delete process.env.TENSHI_MCP_SERVERS_PATH
     else process.env.TENSHI_MCP_SERVERS_PATH = previous
     rmSync(dir, { recursive: true, force: true })
   }
+  const { loadRegistry } = await import('../../src/config/servers.js')
+  try {
+    loadRegistry()
+  } catch (err) {
+    // A refused registry leaves nothing behind; the caller sees the error.
+    restore()
+    throw err
+  }
+  return restore
 }
 
 /**
@@ -393,6 +425,36 @@ export async function startCountingSink() {
     port: server.address().port,
     attempts: () => attempts,
     close: () => new Promise(resolve => server.close(() => resolve()))
+  }
+}
+
+/**
+ * A TCP forwarder on 127.0.0.1 that pipes each new connection to the current
+ * target port. `retarget(port)` changes where later connections go, so a test
+ * can put a server with a different host key behind the same registry entry.
+ */
+export async function startTcpForwarder(targetPort) {
+  let target = targetPort
+  const sockets = new Set()
+  const server = createServer(inbound => {
+    const outbound = connectTcp(target, '127.0.0.1')
+    sockets.add(inbound)
+    sockets.add(outbound)
+    const done = () => { inbound.destroy(); outbound.destroy(); sockets.delete(inbound); sockets.delete(outbound) }
+    inbound.on('error', done).on('close', done)
+    outbound.on('error', done).on('close', done)
+    inbound.pipe(outbound)
+    outbound.pipe(inbound)
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  return {
+    host: '127.0.0.1',
+    port: server.address().port,
+    retarget(port) { target = port },
+    async close() {
+      for (const s of sockets) s.destroy()
+      await new Promise(resolve => server.close(() => resolve()))
+    }
   }
 }
 

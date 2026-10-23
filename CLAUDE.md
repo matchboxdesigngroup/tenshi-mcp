@@ -46,6 +46,7 @@ src/
   config/servers.js     Load + validate servers.json (Zod), lookup functions
   errors.js             Fixed error codes returned to the model
   ssh/client.js         Connection pool keyed by server ID, 5-min idle timeout, SFTP channels only
+  ssh/host-key.js       Host-key pins: fingerprint form, constant-time verifier
   ssh/sftp.js           Read-only SFTP session facade, 10s per-call deadline
   ssh/confine.js        Lexical and realpath confinement, path-segment comparison
   tools/site.js         Registry lookup for tool calls
@@ -57,8 +58,11 @@ scripts/
 
 tests/
   helpers/fake-sftp-server.js  In-process SSH/SFTP server fake (ssh2 server mode)
-  config.test.js        Unit: registry validation
-  client.test.js        Unit: registry guard, host-key seam
+  helpers/host-key-vectors.js  Fixed public keys with their ssh-keygen fingerprints
+  config.test.js        Unit: registry validation, host-key pins
+  client.test.js        Unit: registry guard, host verifier
+  host-key.test.js      Unit: pin form, constant-time comparison, verifier
+  host-key-pinning.test.js  Unit: host-key pinning against the fake
   sftp.test.js          Unit: session facade, timeout, session close
   confine.test.js       Unit: path confinement
   read-log.test.js      Unit: read_log against the fake
@@ -77,17 +81,20 @@ Not committed. Path: `TENSHI_MCP_SERVERS_PATH` in the server process environment
 
 Each server entry specifies per-site `wordpressRoot` and `logDir` to handle different host layouts (SpinupWP vs custom).
 
+Each server also requires `hostKeys`: one to five SHA-256 host-key fingerprints in the OpenSSH form (`SHA256:<base64>`, as `ssh-keygen -lf` prints). Pins are recorded out of band and changed through a reviewed change; the README section "Host-key pins" has the commands and the rotation steps. A server without valid pins makes the whole registry refuse to load (the error names the server id, never the value). Never add trust on first use, an environment override or a switch that skips the check.
+
 ## Security model
 
 Details in the README security model; the design follows the platform ADR on tool-layer remote access (private platform repo). ADR-002's command allowlist is superseded.
 
 1. **Registry allowlist** — only servers and sites in `servers.json` are reachable; unknown sites are refused before any network activity.
-2. **No remote commands** — tools use only the read-only SFTP facade in `src/ssh/sftp.js` (realpath, lstat, open for reading, fstat, bounded read, close). Never add an exec, shell or write path, and never import `src/ssh/client.js`, `node-ssh` or `ssh2` from a tool.
-3. **Path confinement** — `read_file` paths and log paths are checked lexically in the tool before any connection is opened (keep it that way: refusals must not depend on the server), then resolved with SFTP realpath (non-canonical replies refused) and compared to the canonical root by path segment; the target must be a regular file (lstat before open, fstat after).
-4. **Limits** — `read_log`: 500 lines, 51200 bytes, last 256 KB of the log, lines cut at 2000 characters, filter is a literal case-insensitive substring. `read_file`: 51200 bytes. 10-second deadline per call; on expiry the SFTP channel is closed.
-5. **Errors** — fixed codes from `src/errors.js`; never echo arguments, server paths or remote error text.
+2. **Host-key pinning** — `connect` in `src/ssh/client.js` always passes `hostHash: 'sha256'` and the verifier from `hostVerifierFor(server)` (`src/ssh/host-key.js`), on every new connection including reconnects. The verifier compares against every pin in constant time, with no early exit, and rejects during key exchange, before authentication. A mismatch is the fixed `E_HOST_KEY`, with no fingerprint, host or path and no log line. Never connect without the verifier, and never cache a verification result across connections.
+3. **No remote commands** — tools use only the read-only SFTP facade in `src/ssh/sftp.js` (realpath, lstat, open for reading, fstat, bounded read, close). Never add an exec, shell or write path, and never import `src/ssh/client.js`, `node-ssh` or `ssh2` from a tool.
+4. **Path confinement** — `read_file` paths and log paths are checked lexically in the tool before any connection is opened (keep it that way: refusals must not depend on the server), then resolved with SFTP realpath (non-canonical replies refused) and compared to the canonical root by path segment; the target must be a regular file (lstat before open, fstat after).
+5. **Limits** — `read_log`: 500 lines, 51200 bytes, last 256 KB of the log, lines cut at 2000 characters, filter is a literal case-insensitive substring. `read_file`: 51200 bytes. 10-second deadline per call; on expiry the SFTP channel is closed.
+6. **Errors** — fixed codes from `src/errors.js` (`E_HOST_KEY` included); never echo arguments, server paths or remote error text.
 
-Not covered yet (tracked privately): host-key pinning (`hostVerifierFor` in `src/ssh/client.js` is the seam), sensitive-file policy and redaction (seam: `openConfinedFile` in `src/ssh/confine.js`), detecting a file replaced between the checks and the open, audit log.
+Not covered yet (tracked privately): sensitive-file policy and redaction (seam: `openConfinedFile` in `src/ssh/confine.js`), detecting a file replaced between the checks and the open, audit log.
 
 ## MCP registration
 

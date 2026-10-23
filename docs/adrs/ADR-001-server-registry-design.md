@@ -3,6 +3,8 @@
 **Date:** 2026-06-04  
 **Status:** Accepted
 
+> **Update (host-key pins).** Each server entry now also requires `hostKeys`: one to five SHA-256 host-key fingerprints in the OpenSSH form (`SHA256:<base64>`), recorded out of band and changed through a reviewed change. The schema validates and normalises them at load time. A server without valid pins makes the whole registry refuse to load, with an error that names the server id and never the value. A failed load leaves the registry empty. This follows the platform ADR on tool-layer remote access (private platform repository), and the README section "Host-key pins" describes the field. The text below is kept as the original record.
+
 ## Context
 
 The MCP server needs to map site domains (e.g. `example.com`) to SSH connection parameters and filesystem paths. Different servers have different directory layouts (SpinupWP vs custom), so paths must be per-site, not assumed.
