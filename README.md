@@ -167,7 +167,8 @@ How it reads:
 
 - Only the last 256 KB of the log are read (one bounded SFTP read from the end of the file). Older content is neither returned nor searched. When the window starts mid-file, its first, possibly partial, line is dropped.
 - The filter runs in the server process on each line as a plain substring test, ignoring case. It is never turned into a regular expression or sent to the remote server, so characters such as `.`, `*`, `(` or `|` match themselves.
-- The last `lines` matching lines are returned. Lines longer than 2000 characters are cut and end with ` [line truncated]`. The returned content is capped at 51200 bytes (UTF-8); when the cap is hit, the oldest selected lines are dropped.
+- The last `lines` matching lines are returned. Lines longer than 2000 characters are cut (never inside a surrogate pair) and end with ` [line truncated]`. The returned content is capped at 51200 bytes (UTF-8); when the cap is hit, the oldest selected lines are dropped.
+- The byte caps count the UTF-8 bytes of the content before the result is serialised as JSON. The serialised text can be larger: control characters are escaped (up to 6 bytes each), and bytes that are not valid UTF-8 are shown as U+FFFD (3 bytes each).
 
 **Example response:**
 
@@ -208,7 +209,7 @@ Reads the start of a regular file under the WordPress root of a configured site.
 }
 ```
 
-`path` is the file's canonical path relative to the canonical WordPress root (symlinks resolved). `truncated: true` means the file is longer than `maxBytes` and was cut off.
+`path` is the file's canonical path relative to the canonical WordPress root (symlinks resolved). `truncated: true` means the file is longer than `maxBytes` and was cut off. A cut never ends inside a multibyte UTF-8 character: an incomplete character at the cut is dropped, so `bytes` can be up to 3 less than `maxBytes`. The byte caps count the UTF-8 bytes of the content before the result is serialised as JSON. The serialised text can be larger: control characters are escaped (up to 6 bytes each), and bytes that are not valid UTF-8 are shown as U+FFFD (3 bytes each).
 
 ### Errors
 
@@ -217,7 +218,7 @@ Tool failures return a fixed code and message, never the arguments, a server pat
 | Code | Meaning |
 |---|---|
 | `E_NOT_AVAILABLE` | Unknown site, path outside the allowed directory, missing file, not a regular file, or permission denied. These cases are deliberately indistinguishable. |
-| `E_INVALID_INPUT` | The arguments failed validation inside the tool. Arguments that fail the MCP schema (for example an unknown `log` value) are rejected earlier by the MCP SDK with its own validation message. |
+| `E_INVALID_INPUT` | The arguments failed validation inside the tool (for example a `path` over 1024 characters). Arguments that fail the MCP schema (for example an unknown `log` value) are rejected earlier by the MCP SDK with its own validation message. |
 | `E_TIMEOUT` | The call did not finish within 10 seconds; its SFTP channel was closed. |
 | `E_REMOTE` | The connection or the SFTP session failed. |
 | `E_INTERNAL` | Unexpected failure inside the tool. |
@@ -234,15 +235,15 @@ The tools read over SFTP only. The design follows the platform ADR on tool-layer
 
 **Path confinement** (`src/ssh/confine.js`), for `read_file` and for every log read by `read_log`:
 
-1. Before any network activity, the relative path must stay under the configured root after normalisation; absolute paths, NUL bytes and paths over 1024 characters are refused.
-2. On the server, the root and the target are resolved with SFTP `realpath` (symlinks followed). The target must lie strictly under the canonical root, compared by whole path segment, not by string prefix.
+1. Before any network activity, the relative path must stay under the configured root after normalisation; absolute paths and NUL bytes are refused, and paths over 1024 characters fail argument validation. These refusals, like unknown sites, are made before a connection is opened, so they return `E_NOT_AVAILABLE` even when the server is unreachable.
+2. On the server, the root and the target are resolved with SFTP `realpath` (symlinks followed). A reply that is not in canonical form (a `.`, `..` or empty segment) is refused, not normalised. The target must lie strictly under the canonical root, compared by whole path segment, not by string prefix.
 3. The target must be a regular file (`lstat` before open, `fstat` on the open handle).
 
 **Limits:** `read_log` returns at most 500 lines and 51200 bytes from the last 256 KB of the log; `read_file` returns at most 51200 bytes. Each call has a 10-second deadline covering connect, path checks and reads; on expiry the SFTP channel is closed and the call returns `E_TIMEOUT`.
 
 **Errors** are the fixed codes listed under [Errors](#errors).
 
-**Not covered yet:** the SFTP account's own rights are not narrowed by this server, so use a dedicated read-only account where you control the host. Further hardening (host-key pinning, a sensitive-file policy with redaction, an audit log) is in progress and tracked privately; until it lands, keep to the status note at the top of this file.
+**Not covered yet:** the SFTP account's own rights are not narrowed by this server, so use a dedicated read-only account where you control the host. The checks run before the file is opened, and a file replaced between those checks and the open is not detected yet (the type is checked again on the open handle, the path is not). Further hardening (host-key pinning, a sensitive-file policy with redaction, an audit log) is in progress and tracked privately; until it lands, keep to the status note at the top of this file.
 
 ---
 
@@ -264,7 +265,8 @@ Tests use `vitest`. No real server is needed: the SFTP tests start an in-process
 | `tests/sftp.test.js` | Read-only session facade, per-call timeout, session close, read budget |
 | `tests/confine.test.js` | Lexical confinement and path-segment comparison |
 | `tests/read-log.test.js` | Log selection, tail window, line and byte caps, literal filter, confinement, timeout |
-| `tests/read-file.test.js` | Confinement (traversal, symlinks, sibling prefixes), byte cap, timeout |
+| `tests/read-file.test.js` | Confinement (traversal, symlinks, sibling prefixes, non-canonical realpath replies, type change after open), byte cap and character boundaries, timeout |
+| `tests/refusal-order.test.js` | Refusals that need no server open no connection or SFTP session and do not depend on the server being reachable |
 | `tests/errors.test.js` | Fixed error codes and messages |
 | `tests/boundaries.test.js` | Module boundaries: only `src/ssh/client.js` uses the SSH library, tools use the facade |
 | `tests/server.test.js` | Protocol: server name, tool list, fixed refusal over stdio, env fallback |
@@ -316,6 +318,7 @@ tests/
   confine.test.js       Unit: path confinement
   read-log.test.js      Unit: read_log against the fake
   read-file.test.js     Unit: read_file against the fake
+  refusal-order.test.js Unit: refusals before any network activity
   errors.test.js        Unit: error codes
   boundaries.test.js    Unit: module boundaries of the SFTP layer
   server.test.js        Protocol: server name, tool list, refusal over stdio, env fallback

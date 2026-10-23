@@ -63,6 +63,7 @@ tests/
   confine.test.js       Unit: path confinement
   read-log.test.js      Unit: read_log against the fake
   read-file.test.js     Unit: read_file against the fake
+  refusal-order.test.js Unit: refusals before any network activity
   errors.test.js        Unit: error codes
   boundaries.test.js    Unit: module boundaries of the SFTP layer
   server.test.js        Protocol: server name, tool list, refusal over stdio, env fallback
@@ -82,11 +83,11 @@ Details in the README security model; the design follows the platform ADR on too
 
 1. **Registry allowlist** — only servers and sites in `servers.json` are reachable; unknown sites are refused before any network activity.
 2. **No remote commands** — tools use only the read-only SFTP facade in `src/ssh/sftp.js` (realpath, lstat, open for reading, fstat, bounded read, close). Never add an exec, shell or write path, and never import `src/ssh/client.js`, `node-ssh` or `ssh2` from a tool.
-3. **Path confinement** — `read_file` paths and log paths are checked lexically, then resolved with SFTP realpath and compared to the canonical root by path segment; the target must be a regular file.
+3. **Path confinement** — `read_file` paths and log paths are checked lexically in the tool before any connection is opened (keep it that way: refusals must not depend on the server), then resolved with SFTP realpath (non-canonical replies refused) and compared to the canonical root by path segment; the target must be a regular file (lstat before open, fstat after).
 4. **Limits** — `read_log`: 500 lines, 51200 bytes, last 256 KB of the log, lines cut at 2000 characters, filter is a literal case-insensitive substring. `read_file`: 51200 bytes. 10-second deadline per call; on expiry the SFTP channel is closed.
 5. **Errors** — fixed codes from `src/errors.js`; never echo arguments, server paths or remote error text.
 
-Not covered yet (tracked privately): host-key pinning (`hostVerifierFor` in `src/ssh/client.js` is the seam), sensitive-file policy and redaction (seam: `openConfinedFile` in `src/ssh/confine.js`), audit log.
+Not covered yet (tracked privately): host-key pinning (`hostVerifierFor` in `src/ssh/client.js` is the seam), sensitive-file policy and redaction (seam: `openConfinedFile` in `src/ssh/confine.js`), detecting a file replaced between the checks and the open, audit log.
 
 ## MCP registration
 
