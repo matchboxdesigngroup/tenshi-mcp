@@ -99,9 +99,16 @@ cp .env.example .env
 
 `TENSHI_MCP_SERVERS_PATH` was called `SSH_MCP_SERVERS_PATH` before the rename to Tenshi-MCP. The old name still works as a deprecated fallback: it is read only when `TENSHI_MCP_SERVERS_PATH` is unset, and the server prints a one-line warning on stderr at startup. If both are set, the new name wins and the warning says the old one is ignored. The old name is removed in M5; rename it wherever you set it (local `.env`, MCP registration `env` block, the environment of the process that spawns this server).
 
-### 4. Register with Claude Code
+### 4. Register the server in your MCP client
 
-Add the MCP server to your Claude Code settings. For project-scoped registration, edit `.claude/settings.json` in this repo:
+Register the server in your MCP client configuration. For Claude Code, use a project `.mcp.json` in this repo, created from the tracked example:
+
+```bash
+cp .mcp.json.example .mcp.json
+# edit .mcp.json: replace /path/to/tenshi-mcp with the absolute path of your checkout
+```
+
+`.mcp.json` is git-ignored, so your local paths stay out of the repo. `.mcp.json.example` contains:
 
 ```json
 {
@@ -117,9 +124,7 @@ Add the MCP server to your Claude Code settings. For project-scoped registration
 }
 ```
 
-For global registration (available in all Claude Code sessions), add the same block to `~/.claude/settings.json`.
-
-Use absolute paths — relative paths break when Claude Code spawns the server from a different working directory.
+Use absolute paths: the client may start the server from a different working directory.
 
 ### 5. Verify the connection
 

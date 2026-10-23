@@ -1231,6 +1231,8 @@ git commit -m "test: manual integration script for end-to-end SSH verification"
 
 ## Task 9: Claude Code MCP registration
 
+> **Correction note:** this task says to register the server in `.claude/settings.json`. The repo instead ships `.mcp.json.example` for a project `.mcp.json` (git-ignored); see the README registration step. The steps below are kept as originally planned.
+
 **Files:**
 - Modify: `.claude/settings.json` (or `~/.claude/settings.json` for global registration)
 

@@ -77,9 +77,9 @@ Three enforcement layers:
 
 Hard caps enforced server-side: 500 lines max, 50 KB max.
 
-## MCP registration (Claude Code)
+## MCP registration
 
-Add to `.claude/settings.json`:
+Register the server in your MCP client configuration. For Claude Code, use a project `.mcp.json`: `cp .mcp.json.example .mcp.json` (`.mcp.json` is git-ignored). The example contains:
 
 ```json
 {
