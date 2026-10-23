@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { withSftpSession } from '../ssh/sftp.js'
-import { openConfinedFile } from '../ssh/confine.js'
+import { confineLexically, openConfinedFile } from '../ssh/confine.js'
 import { toToolError } from '../errors.js'
 import { lookupSite } from './site.js'
 
@@ -89,6 +89,9 @@ export async function readLogHandler(rawInput, options = {}) {
     const lines = Math.min(input.lines, MAX_LINES)
     const site = lookupSite(input.site)
     const { root, relativePath } = logLocation(input.log, input.site, site)
+    // Every check that needs no server runs before the connection is opened,
+    // so a refusal never depends on the server being reachable.
+    confineLexically(root, relativePath)
 
     const { window, start } = await withSftpSession(site.serverId, async session => {
       const { handle, size } = await openConfinedFile(session, root, relativePath)

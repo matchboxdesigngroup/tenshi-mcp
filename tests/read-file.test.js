@@ -3,6 +3,7 @@ import {
   startFakeSftpServer,
   loadFakeRegistry,
   nonSftpRequests,
+  countNetwork,
   NO_NON_SFTP_REQUESTS
 } from './helpers/fake-sftp-server.js'
 import { readFileHandler, MAX_BYTES } from '../src/tools/read-file.js'
@@ -112,16 +113,22 @@ describe('read_file reads inside the root', () => {
 })
 
 describe('read_file confinement', () => {
-  it('rejects a path traversal attempt before any SFTP request', async () => {
-    const err = await failure({ site: 'example.com', path: '../../etc/passwd', maxBytes: 1000 })
+  async function refusedWithoutNetwork(input) {
+    let err
+    const { before, after } = await countNetwork(fake, closeAll, async () => {
+      err = await failure(input)
+    })
     expect(err.message).toBe(NOT_AVAILABLE)
+    expect(after).toEqual(before)
     expect(fake.events.ops).toEqual([])
+  }
+
+  it('rejects a path traversal attempt before any connection or SFTP session', async () => {
+    await refusedWithoutNetwork({ site: 'example.com', path: '../../etc/passwd', maxBytes: 1000 })
   })
 
-  it('rejects absolute path input before any SFTP request', async () => {
-    const err = await failure({ site: 'example.com', path: '/etc/passwd', maxBytes: 1000 })
-    expect(err.message).toBe(NOT_AVAILABLE)
-    expect(fake.events.ops).toEqual([])
+  it('rejects absolute path input before any connection or SFTP session', async () => {
+    await refusedWithoutNetwork({ site: 'example.com', path: '/etc/passwd', maxBytes: 1000 })
   })
 
   it.each([
@@ -130,10 +137,8 @@ describe('read_file confinement', () => {
     ['wp-config.php\0.txt'],
     ['.'],
     ['wp-content/..']
-  ])('rejects %j lexically before any SFTP request', async path => {
-    const err = await failure({ site: 'example.com', path })
-    expect(err.message).toBe(NOT_AVAILABLE)
-    expect(fake.events.ops).toEqual([])
+  ])('rejects %j lexically before any connection or SFTP session', async path => {
+    await refusedWithoutNetwork({ site: 'example.com', path })
   })
 
   it.each([
@@ -156,10 +161,14 @@ describe('read_file confinement', () => {
     }
   )
 
-  it.each([['unknown.example'], ['__proto__'], ['constructor']])(
-    'refuses site %j before any SFTP request', async site => {
-      const err = await failure({ site, path: 'wp-config.php' })
+  it.each([['unknown.example'], ['__proto__'], ['constructor'], ['toString'], ['hasOwnProperty']])(
+    'refuses site %j before any connection or SFTP session', async site => {
+      let err
+      const { before, after } = await countNetwork(fake, closeAll, async () => {
+        err = await failure({ site, path: 'wp-config.php' })
+      })
       expect(err.message).toBe(NOT_AVAILABLE)
+      expect(after).toEqual(before)
       expect(fake.events.ops).toEqual([])
     }
   )

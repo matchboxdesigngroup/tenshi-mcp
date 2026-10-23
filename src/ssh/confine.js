@@ -2,8 +2,9 @@ import { posix } from 'path'
 import { ERROR_CODES, ToolError } from '../errors.js'
 
 // Path confinement for every tool that reads a file. Two layers:
-//   1. Lexical, before any network activity: the relative path must stay
-//      under the configured root after normalisation.
+//   1. Lexical: the relative path must stay under the configured root after
+//      normalisation. Tools call confineLexically before opening a
+//      connection; openConfinedFile repeats it as a second layer.
 //   2. Canonical, on the server: the root and the target are resolved with
 //      SFTP realpath (symlinks followed) and the target must lie strictly
 //      under the canonical root, compared by path segment, never by string

@@ -3,6 +3,7 @@ import {
   startFakeSftpServer,
   loadFakeRegistry,
   nonSftpRequests,
+  countNetwork,
   NO_NON_SFTP_REQUESTS
 } from './helpers/fake-sftp-server.js'
 import {
@@ -247,10 +248,14 @@ describe('read_log confinement and refusals', () => {
     expect(result.content).toBe('inside root')
   })
 
-  it.each([['unknown.example'], ['__proto__'], ['constructor'], ['toString']])(
-    'refuses site %j before any SFTP request', async site => {
-      const err = await failure({ site, log: 'debug', lines: 10 })
+  it.each([['unknown.example'], ['__proto__'], ['constructor'], ['toString'], ['hasOwnProperty']])(
+    'refuses site %j before any connection or SFTP session', async site => {
+      let err
+      const { before, after } = await countNetwork(fake, closeAll, async () => {
+        err = await failure({ site, log: 'debug', lines: 10 })
+      })
       expect(err.message).toBe(NOT_AVAILABLE)
+      expect(after).toEqual(before)
       expect(fake.events.ops).toEqual([])
     }
   )

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { withSftpSession } from '../ssh/sftp.js'
-import { openConfinedFile } from '../ssh/confine.js'
+import { confineLexically, openConfinedFile } from '../ssh/confine.js'
 import { toToolError } from '../errors.js'
 import { lookupSite } from './site.js'
 
@@ -27,6 +27,9 @@ export async function readFileHandler(rawInput, options = {}) {
     const input = InputSchema.parse(rawInput)
     const maxBytes = Math.min(input.maxBytes, MAX_BYTES)
     const site = lookupSite(input.site)
+    // Every check that needs no server runs before the connection is opened,
+    // so a refusal never depends on the server being reachable.
+    confineLexically(site.wordpressRoot, input.path)
 
     const { buf, relativePath } = await withSftpSession(site.serverId, async session => {
       const opened = await openConfinedFile(session, site.wordpressRoot, input.path)

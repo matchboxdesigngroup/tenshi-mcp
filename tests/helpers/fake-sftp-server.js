@@ -13,6 +13,7 @@
 //   { hangRealpath: true }                   REALPATH on this path never answers
 
 import { writeFileSync, mkdtempSync, rmSync, chmodSync } from 'fs'
+import { createServer } from 'net'
 import { tmpdir } from 'os'
 import { join, posix } from 'path'
 import ssh2 from 'ssh2'
@@ -315,7 +316,7 @@ export async function startFakeSftpServer({ files }) {
  * @param {Awaited<ReturnType<typeof startFakeSftpServer>>} fake
  * @param {Record<string, { wordpressRoot: string, logDir: string }>} sites
  */
-export async function loadFakeRegistry(fake, sites, serverId = 'fake-server') {
+export async function loadFakeRegistry(fake, sites, serverId = 'fake-server', extraServers = []) {
   const dir = mkdtempSync(join(tmpdir(), 'tenshi-mcp-registry-'))
   const registryPath = join(dir, 'registry.json')
   writeFileSync(registryPath, JSON.stringify({
@@ -327,7 +328,7 @@ export async function loadFakeRegistry(fake, sites, serverId = 'fake-server') {
       user: fake.username,
       privateKeyPath: fake.clientKeyPath,
       sites
-    }]
+    }, ...extraServers]
   }))
   const previous = process.env.TENSHI_MCP_SERVERS_PATH
   process.env.TENSHI_MCP_SERVERS_PATH = registryPath
@@ -337,6 +338,45 @@ export async function loadFakeRegistry(fake, sites, serverId = 'fake-server') {
     if (previous === undefined) delete process.env.TENSHI_MCP_SERVERS_PATH
     else process.env.TENSHI_MCP_SERVERS_PATH = previous
     rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Network activity counters of the fake: SSH connections accepted and SFTP
+ * sessions opened, both cumulative.
+ */
+export function networkCounters(fake) {
+  return { connections: fake.events.connections, sftpSessionsOpened: fake.events.sftpSessionsOpened }
+}
+
+/**
+ * Run `fn` with an empty connection pool and return the counters before and
+ * after, so a test can assert that `fn` caused no network activity at all.
+ * @param {() => void} closeAll the pool's closeAll
+ */
+export async function countNetwork(fake, closeAll, fn) {
+  closeAll()
+  await fake.waitFor(() => fake.openConnections() === 0)
+  const before = networkCounters(fake)
+  await fn()
+  // Give a stray connection attempt time to reach the fake.
+  await new Promise(resolve => setTimeout(resolve, 50))
+  return { before, after: networkCounters(fake) }
+}
+
+/**
+ * A TCP listener that counts connection attempts and drops each at once, so
+ * the SSH handshake always fails. Stands in for an unreachable server.
+ */
+export async function startCountingSink() {
+  let attempts = 0
+  const server = createServer(socket => { attempts++; socket.destroy() })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  return {
+    host: '127.0.0.1',
+    port: server.address().port,
+    attempts: () => attempts,
+    close: () => new Promise(resolve => server.close(() => resolve()))
   }
 }
 
