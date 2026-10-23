@@ -88,16 +88,20 @@ Multiple servers and multiple sites per server are supported.
 }
 ```
 
-### 3. Configure the `TENSHI_MCP_SERVERS_PATH` environment variable (optional)
+### 3. Set the `TENSHI_MCP_SERVERS_PATH` environment variable (optional)
 
-By default the server loads `./servers.json` relative to the working directory. Override with:
+By default the server loads `./servers.json` relative to its working directory. To use another file, set `TENSHI_MCP_SERVERS_PATH` in the environment of the process that starts the server. The server does not load `.env` files.
+
+- From an MCP client: the `env` block of the server entry in the client configuration (see step 4).
+- From a shell: `export TENSHI_MCP_SERVERS_PATH=/absolute/path/to/servers.json` before `npm start`, or inline:
 
 ```bash
-cp .env.example .env
-# edit .env: set TENSHI_MCP_SERVERS_PATH=/absolute/path/to/servers.json
+TENSHI_MCP_SERVERS_PATH=/absolute/path/to/servers.json npm start
 ```
 
-`TENSHI_MCP_SERVERS_PATH` was called `SSH_MCP_SERVERS_PATH` before the rename to Tenshi-MCP. The old name still works as a deprecated fallback: it is read only when `TENSHI_MCP_SERVERS_PATH` is unset, and the server prints a one-line warning on stderr at startup. If both are set, the new name wins and the warning says the old one is ignored. The old name is removed in M5; rename it wherever you set it (local `.env`, MCP registration `env` block, the environment of the process that spawns this server).
+`.env.example` lists the variable as a template for your shell or process manager; nothing loads it automatically.
+
+`TENSHI_MCP_SERVERS_PATH` was called `SSH_MCP_SERVERS_PATH` before the rename to Tenshi-MCP. The old name still works as a deprecated fallback: it is read only when `TENSHI_MCP_SERVERS_PATH` is unset or empty (whitespace only counts as empty), and the server prints a one-line warning on stderr at startup. If both are set, the new name wins and the warning says the old one is ignored. Values are used as given, not trimmed. The old name is removed in M5; rename it wherever you set it (the `env` block of your MCP client configuration, your shell profile or `export`, your process manager configuration).
 
 ### 4. Register the server in your MCP client
 

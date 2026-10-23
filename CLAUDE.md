@@ -10,10 +10,11 @@ The tool layer is under security review. Do not expose this server to untrusted 
 
 ```bash
 npm install
-cp .env.example .env          # edit TENSHI_MCP_SERVERS_PATH if needed
 cp servers.json.example servers.json  # fill in real server details
-npm start
+npm start                             # reads ./servers.json from the working directory
 ```
+
+To use another registry file, set `TENSHI_MCP_SERVERS_PATH` in the environment of the process that starts the server (the `env` block of the MCP client entry, or `export` / inline in a shell). The server does not load `.env` files; `.env.example` is only a template.
 
 ## Running tests
 
@@ -64,7 +65,7 @@ tests/
 
 ## Server registry (`servers.json`)
 
-Not committed. Format: see `.env.example` for path config, and `docs/specs/` for full schema.
+Not committed. Path: `TENSHI_MCP_SERVERS_PATH` in the server process environment, default `./servers.json`. Format: see `servers.json.example`, and `docs/specs/` for the full schema.
 
 Each server entry specifies per-site `wordpressRoot` and `logDir` to handle different host layouts (SpinupWP vs custom).
 
@@ -95,7 +96,8 @@ Register the server in your MCP client configuration. For Claude Code, use a pro
 }
 ```
 
-Replace `/path/to/tenshi-mcp` with the absolute path of your checkout. `SSH_MCP_SERVERS_PATH` is the deprecated former name of `TENSHI_MCP_SERVERS_PATH`: still read when the new name is unset, with a startup warning on stderr; removed in M5.
+Replace `/path/to/tenshi-mcp` with the absolute path of your checkout. `SSH_MCP_SERVERS_PATH` is the deprecated former name of `TENSHI_MCP_SERVERS_PATH`: still read when the new name is unset or empty (whitespace only counts as empty), with a startup warning on stderr; removed in M5.
+
 ## Docs
 
 - `docs/specs/` — implementation plan
