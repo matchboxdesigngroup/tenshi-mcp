@@ -8,7 +8,7 @@ The tool layer is under security review. Do not expose this server to untrusted 
 
 ## Overview
 
-During a WordPress incident, you ask Claude things like "show me the last 50 error log lines for blueprintcoffee.com" or "read wp-config.php on that server." This MCP server handles the SSH connection, enforces a strict security model, and returns structured output back to Claude.
+During a WordPress incident, you ask Claude things like "show me the last 50 error log lines for example.com" or "read wp-config.php on that server." This MCP server handles the SSH connection, enforces a strict security model, and returns structured output back to Claude.
 
 **Transport:** stdio (spawned by Claude Code as a child process)  
 **Node.js:** ≥20 (ESM)  
@@ -141,7 +141,7 @@ Tails lines from a WordPress log file on a configured server.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `site` | string | yes | — | Site domain, e.g. `blueprintcoffee.com` |
+| `site` | string | yes | — | Site domain, e.g. `example.com` |
 | `log` | `debug` \| `error` \| `access` | yes | — | Log type |
 | `lines` | number | no | 50 | Lines to tail (hard cap: 500) |
 | `filter` | string | no | — | Case-insensitive grep filter |
@@ -173,7 +173,7 @@ Reads a file within the WordPress root of a configured site.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `site` | string | yes | — | Site domain, e.g. `blueprintcoffee.com` |
+| `site` | string | yes | — | Site domain, e.g. `example.com` |
 | `path` | string | yes | — | Relative path within WordPress root, e.g. `wp-config.php` |
 | `maxBytes` | number | no | 10000 | Max bytes to read (hard cap: 51200) |
 

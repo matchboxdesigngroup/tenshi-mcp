@@ -34,7 +34,7 @@ Requires a real `servers.json` with valid SSH credentials:
 
 ```bash
 node tests/integration.js <serverId> <siteDomain>
-# e.g.: node tests/integration.js blueprintcoffee blueprintcoffee.com
+# e.g.: node tests/integration.js example-server example.com
 ```
 
 ## Project structure

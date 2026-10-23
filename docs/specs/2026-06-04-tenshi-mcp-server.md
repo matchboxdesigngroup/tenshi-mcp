@@ -766,7 +766,7 @@ export async function readLogHandler(rawInput) {
 export const readLogTool = {
   name: 'read_log',
   schema: {
-    site: { type: 'string', description: 'Site domain, e.g. blueprintcoffee.com' },
+    site: { type: 'string', description: 'Site domain, e.g. example.com' },
     log: { type: 'string', enum: ['debug', 'access', 'error'], description: 'Log type' },
     lines: { type: 'number', description: 'Number of lines to tail (max 500)', default: 50 },
     filter: { type: 'string', description: 'Optional grep filter string' }
@@ -970,7 +970,7 @@ export async function readFileHandler(rawInput) {
 export const readFileTool = {
   name: 'read_file',
   schema: {
-    site: { type: 'string', description: 'Site domain, e.g. blueprintcoffee.com' },
+    site: { type: 'string', description: 'Site domain, e.g. example.com' },
     path: { type: 'string', description: 'Relative path within WordPress root, e.g. wp-config.php' },
     maxBytes: { type: 'number', description: 'Max bytes to read (hard cap: 51200)', default: 10000 }
   },
@@ -1024,7 +1024,7 @@ server.tool(
   'read_log',
   'Tail lines from a WordPress log file (debug/error/access) on a configured server',
   {
-    site: z.string().describe('Site domain, e.g. blueprintcoffee.com'),
+    site: z.string().describe('Site domain, e.g. example.com'),
     log: z.enum(['debug', 'access', 'error']).describe('Log type'),
     lines: z.number().int().min(1).max(500).default(50).describe('Number of lines to tail'),
     filter: z.string().optional().describe('Optional grep filter string')
@@ -1048,7 +1048,7 @@ server.tool(
   'read_file',
   'Read a file within the WordPress directory of a configured site',
   {
-    site: z.string().describe('Site domain, e.g. blueprintcoffee.com'),
+    site: z.string().describe('Site domain, e.g. example.com'),
     path: z.string().describe('Relative path within WordPress root, e.g. wp-config.php'),
     maxBytes: z.number().int().min(1).max(51200).default(10000).describe('Max bytes to read')
   },
@@ -1147,7 +1147,7 @@ This is a manual script, not a vitest file. Run it directly with a real `servers
 /**
  * Manual integration test — requires a real servers.json with valid SSH credentials.
  * Usage: node tests/integration.js <serverId> <siteDomain>
- * Example: node tests/integration.js blueprintcoffee blueprintcoffee.com
+ * Example: node tests/integration.js example-server example.com
  */
 
 import { loadRegistry } from '../src/config/servers.js'
@@ -1208,10 +1208,10 @@ run().finally(() => closeAll())
 
 - [ ] **Step 2: Run integration test against a real server**
 
-Replace `blueprintcoffee` and `blueprintcoffee.com` with an actual entry from your `servers.json`:
+Replace `example-server` and `example.com` with an actual entry from your `servers.json`:
 
 ```bash
-node tests/integration.js blueprintcoffee blueprintcoffee.com
+node tests/integration.js example-server example.com
 ```
 
 Expected output:
@@ -1271,7 +1271,7 @@ Expected: `tenshi-mcp` listed as connected, with tools `read_log` and `read_file
 In a new Claude Code session:
 
 ```
-Use read_log to fetch the last 10 lines of the error log for blueprintcoffee.com
+Use read_log to fetch the last 10 lines of the error log for example.com
 ```
 
 Expected: Claude calls the tool and returns formatted log output. No permission prompts for the MCP call itself (stdio transport runs locally).

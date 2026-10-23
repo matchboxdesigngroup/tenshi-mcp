@@ -1,7 +1,7 @@
 /**
  * Manual integration test — requires a real servers.json with valid SSH credentials.
  * Usage: node tests/integration.js <serverId> <siteDomain>
- * Example: node tests/integration.js blueprintcoffee blueprintcoffee.com
+ * Example: node tests/integration.js example-server example.com
  */
 
 import { loadRegistry } from '../src/config/servers.js'

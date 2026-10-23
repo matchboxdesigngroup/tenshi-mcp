@@ -5,7 +5,7 @@
 
 ## Context
 
-The MCP server needs to map site domains (e.g. `blueprintcoffee.com`) to SSH connection parameters and filesystem paths. Different servers have different directory layouts (SpinupWP vs custom), so paths must be per-site, not assumed.
+The MCP server needs to map site domains (e.g. `example.com`) to SSH connection parameters and filesystem paths. Different servers have different directory layouts (SpinupWP vs custom), so paths must be per-site, not assumed.
 
 ## Decision
 

@@ -39,7 +39,7 @@ export async function readFileHandler(rawInput) {
 export const readFileTool = {
   name: 'read_file',
   schema: {
-    site: { type: 'string', description: 'Site domain, e.g. blueprintcoffee.com' },
+    site: { type: 'string', description: 'Site domain, e.g. example.com' },
     path: { type: 'string', description: 'Relative path within WordPress root, e.g. wp-config.php' },
     maxBytes: { type: 'number', description: 'Max bytes to read (hard cap: 51200)', default: 10000 }
   },

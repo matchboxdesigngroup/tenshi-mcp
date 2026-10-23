@@ -48,7 +48,7 @@ export async function readLogHandler(rawInput) {
 export const readLogTool = {
   name: 'read_log',
   schema: {
-    site: { type: 'string', description: 'Site domain, e.g. blueprintcoffee.com' },
+    site: { type: 'string', description: 'Site domain, e.g. example.com' },
     log: { type: 'string', enum: ['debug', 'access', 'error'], description: 'Log type' },
     lines: { type: 'number', description: 'Number of lines to tail (max 500)', default: 50 },
     filter: { type: 'string', description: 'Optional grep filter string' }
