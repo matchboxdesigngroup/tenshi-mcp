@@ -146,10 +146,10 @@ describe('read_file confinement', () => {
   })
 
   it.each([['wp-content'], ['wp-content/plugins'], ['wp-content/missing.php']])(
-    'rejects %j, which is not a regular file', async path => {
+    'rejects %j, which is not a regular file, without sending OPEN', async path => {
       const err = await failure({ site: 'example.com', path })
       expect(err.message).toBe(NOT_AVAILABLE)
-      expect(fake.events.opens).toEqual([])
+      expect(fake.events.ops.filter(o => o.op === 'OPEN')).toEqual([])
     }
   )
 

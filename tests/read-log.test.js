@@ -233,10 +233,10 @@ describe('read_log confinement and refusals', () => {
     expect(err.message).toBe(NOT_AVAILABLE)
   })
 
-  it('refuses a log path that is a directory', async () => {
+  it('refuses a log path that is a directory without sending OPEN', async () => {
     const err = await failure({ site: 'escape.example', log: 'access', lines: 10 })
     expect(err.message).toBe(NOT_AVAILABLE)
-    expect(fake.events.opens).toEqual([])
+    expect(fake.events.ops.filter(o => o.op === 'OPEN')).toEqual([])
   })
 
   it('follows a symlink that stays inside the root', async () => {
