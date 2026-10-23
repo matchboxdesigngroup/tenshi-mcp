@@ -1,5 +1,5 @@
 {
-  "name": "ssh-wp-mcp",
+  "name": "tenshi-mcp",
   "version": "1.0.0",
   "type": "module",
   "main": "src/index.js",

@@ -9,7 +9,7 @@ import { closeAll } from './ssh/client.js'
 loadRegistry()
 
 const server = new McpServer({
-  name: 'ssh-wp-tools',
+  name: 'tenshi-mcp',
   version: '1.0.0'
 })
 
@@ -17,7 +17,7 @@ server.tool(
   'read_log',
   'Tail lines from a WordPress log file (debug/error/access) on a configured server',
   {
-    site: z.string().describe('Site domain, e.g. blueprintcoffee.com'),
+    site: z.string().describe('Site domain, e.g. example.com'),
     log: z.enum(['debug', 'access', 'error']).describe('Log type'),
     lines: z.number().int().min(1).max(500).default(50).describe('Number of lines to tail'),
     filter: z.string().optional().describe('Optional grep filter string')
@@ -41,7 +41,7 @@ server.tool(
   'read_file',
   'Read a file within the WordPress directory of a configured site',
   {
-    site: z.string().describe('Site domain, e.g. blueprintcoffee.com'),
+    site: z.string().describe('Site domain, e.g. example.com'),
     path: z.string().describe('Relative path within WordPress root, e.g. wp-config.php'),
     maxBytes: z.number().int().min(1).max(51200).default(10000).describe('Max bytes to read')
   },

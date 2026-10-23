@@ -1,4 +1,4 @@
-# ssh-triage-mcp
+# Tenshi-MCP
 
 Local MCP server (stdio transport) that SSHs into configured WordPress servers and exposes `read_log` and `read_file` tools for Claude triage sessions.
 
@@ -10,10 +10,11 @@ The tool layer is under security review. Do not expose this server to untrusted 
 
 ```bash
 npm install
-cp .env.example .env          # edit SSH_MCP_SERVERS_PATH if needed
 cp servers.json.example servers.json  # fill in real server details
-npm start
+npm start                             # reads ./servers.json from the working directory
 ```
+
+To use another registry file, set `TENSHI_MCP_SERVERS_PATH` in the environment of the process that starts the server (the `env` block of the MCP client entry, or `export` / inline in a shell). The server does not load `.env` files; `.env.example` is only a template.
 
 ## Running tests
 
@@ -34,7 +35,7 @@ Requires a real `servers.json` with valid SSH credentials:
 
 ```bash
 node tests/integration.js <serverId> <siteDomain>
-# e.g.: node tests/integration.js blueprintcoffee blueprintcoffee.com
+# e.g.: node tests/integration.js example-server example.com
 ```
 
 ## Project structure
@@ -57,13 +58,14 @@ tests/
   executor.test.js      Unit: allowlist + timeout
   read-log.test.js      Unit: path resolution + output shape
   read-file.test.js     Unit: path confinement + traversal guard
+  server.test.js        Protocol: server name and tool list over stdio, env fallback
   audit-check.test.js   Unit: audit allowlist check
   integration.js        Manual: end-to-end SSH against real server
 ```
 
 ## Server registry (`servers.json`)
 
-Not committed. Format: see `.env.example` for path config, and `docs/specs/` for full schema.
+Not committed. Path: `TENSHI_MCP_SERVERS_PATH` in the server process environment, default `./servers.json`. Format: see `servers.json.example`, and `docs/specs/` for the full schema.
 
 Each server entry specifies per-site `wordpressRoot` and `logDir` to handle different host layouts (SpinupWP vs custom).
 
@@ -76,23 +78,25 @@ Three enforcement layers:
 
 Hard caps enforced server-side: 500 lines max, 50 KB max.
 
-## MCP registration (Claude Code)
+## MCP registration
 
-Add to `.claude/settings.json`:
+Register the server in your MCP client configuration. For Claude Code, use a project `.mcp.json`: `cp .mcp.json.example .mcp.json` (`.mcp.json` is git-ignored). The example contains:
 
 ```json
 {
   "mcpServers": {
-    "ssh-wp-tools": {
+    "tenshi-mcp": {
       "command": "node",
-      "args": ["/Users/lema/Projects/ssh-triage-mcp/src/index.js"],
+      "args": ["/path/to/tenshi-mcp/src/index.js"],
       "env": {
-        "SSH_MCP_SERVERS_PATH": "/Users/lema/Projects/ssh-triage-mcp/servers.json"
+        "TENSHI_MCP_SERVERS_PATH": "/path/to/tenshi-mcp/servers.json"
       }
     }
   }
 }
 ```
+
+Replace `/path/to/tenshi-mcp` with the absolute path of your checkout. `SSH_MCP_SERVERS_PATH` is the deprecated former name of `TENSHI_MCP_SERVERS_PATH`: still read when the new name is unset or empty (whitespace only counts as empty), with a startup warning on stderr; removed in M5.
 
 ## Docs
 

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "tenshi-mcp": {
+      "command": "node",
+      "args": ["/path/to/tenshi-mcp/src/index.js"],
+      "env": {
+        "TENSHI_MCP_SERVERS_PATH": "/path/to/tenshi-mcp/servers.json"
+      }
+    }
+  }
+}

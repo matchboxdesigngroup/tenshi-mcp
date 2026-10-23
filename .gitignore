@@ -1,3 +1,4 @@
 node_modules/
 .env
 servers.json
+.mcp.json
