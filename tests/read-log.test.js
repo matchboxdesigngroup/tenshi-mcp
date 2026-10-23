@@ -44,12 +44,24 @@ const BIG_DEBUG = Array.from({ length: 16384 }, (_, i) => `line ${String(i).padS
 const WIDE_LINES = Array.from({ length: 2000 }, (_, i) => `${String(i).padStart(4, '0')}:`.padEnd(1500, 'w'))
 const LONG_LINE = 'L'.repeat(100000)
 
+// A log whose tail window starts inside a two-byte UTF-8 character of a line
+// that matches the filter. Only the complete lines after it may be returned.
+const WINDOW_HEAD = 'head line\n'.repeat(10)
+const PARTIAL_LINE = '\u00e9'.repeat(100) + ' MATCH-PARTIAL\n' // 215 bytes
+const SPLIT_OFFSET = 101 // second byte of the 51st two-byte character
+const WINDOW_TAIL = 'MATCH-LAST 1\nMATCH-LAST 2\n'
+const FILLER_BYTES = WINDOW_BYTES + SPLIT_OFFSET - Buffer.byteLength(PARTIAL_LINE) - Buffer.byteLength(WINDOW_TAIL)
+const FILLER = ('f'.repeat(99) + '\n').repeat(Math.floor(FILLER_BYTES / 100)) +
+  (FILLER_BYTES % 100 > 0 ? 'f'.repeat(FILLER_BYTES % 100 - 1) + '\n' : '')
+const WINDOW_LOG = Buffer.from(WINDOW_HEAD + PARTIAL_LINE + FILLER + WINDOW_TAIL, 'utf8')
+
 const SITES = {
   'example.com': { wordpressRoot: ROOT, logDir: LOGS },
   'big.example': { wordpressRoot: '/var/www/big/public', logDir: '/var/log/sites/big' },
   'stream.example': { wordpressRoot: '/var/www/stream/public', logDir: '/var/log/sites/stream' },
   'escape.example': { wordpressRoot: '/var/www/escape/public', logDir: '/var/log/sites/escape.example' },
-  'inside.example': { wordpressRoot: '/var/www/inside/public', logDir: '/var/log/sites/inside' }
+  'inside.example': { wordpressRoot: '/var/www/inside/public', logDir: '/var/log/sites/inside' },
+  'window.example': { wordpressRoot: '/var/www/window/public', logDir: '/var/log/sites/window' }
 }
 
 let fake
@@ -77,6 +89,8 @@ beforeAll(async () => {
       '/var/www/inside/public/wp-content/debug.log': { symlink: '../logs/debug.log' },
       '/var/www/inside/public/logs/debug.log': { content: 'inside root\n' },
       '/var/log/sites/inside/inside.example.access.log': { content: 'SWAPPED-CONTENT\n', fstatType: 'fifo' },
+
+      '/var/www/window/public/wp-content/debug.log': { content: WINDOW_LOG },
 
       [CANARY]: { content: 'CANARY-SECRET\n' },
       [SIBLING_CANARY]: { content: 'CANARY-SIBLING\n' }
@@ -176,6 +190,19 @@ describe('read_log output shape and caps', () => {
     expect(result.truncated.bytes).toBe(true)
     expect(result.returnedLines).toBeLessThan(500)
     expect(result.content.split('\n').at(-1)).toBe(WIDE_LINES.at(-1))
+  })
+
+  it('drops the partial first line of a window that starts mid-line and mid-character', async () => {
+    // Fixture sanity: the window starts inside the matching partial line.
+    const windowStart = WINDOW_LOG.length - WINDOW_BYTES
+    expect(windowStart - Buffer.byteLength(WINDOW_HEAD)).toBe(SPLIT_OFFSET)
+    expect(WINDOW_LOG[windowStart] & 0xc0).toBe(0x80) // a UTF-8 continuation byte
+
+    const result = await readLogHandler({ site: 'window.example', log: 'debug', lines: 10, filter: 'match' })
+    expect(result.content).toBe('MATCH-LAST 1\nMATCH-LAST 2')
+    expect(result.content).not.toContain('PARTIAL')
+    expect(result.content).not.toContain('\ufffd')
+    expect(result.truncated.window).toBe(true)
   })
 
   it('caps long lines and marks them', async () => {
