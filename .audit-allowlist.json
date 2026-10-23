@@ -168,14 +168,6 @@
       "reason": "Present on main when CI was added; dependency update tracked in #5",
       "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
       "expires": "2026-11-30"
-    },
-    {
-      "id": "GHSA-5xrq-8626-4rwp",
-      "package": "vitest",
-      "severity": "critical",
-      "reason": "Present on main when CI was added; dependency update tracked in #5",
-      "issue": "https://github.com/matchboxdesigngroup/tenshi-mcp/issues/5",
-      "expires": "2026-11-30"
     }
   ]
 }
