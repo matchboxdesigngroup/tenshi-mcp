@@ -132,6 +132,26 @@ describe('resolveServersPath (TENSHI_MCP_SERVERS_PATH with deprecated SSH_MCP_SE
     expect(result).toBe(path.resolve(OLD))
   })
 
+  it('treats a whitespace-only new name as unset, so it cannot shadow the old name', async () => {
+    const { result, warnings } = await resolveWith({ TENSHI_MCP_SERVERS_PATH: ' \t ', SSH_MCP_SERVERS_PATH: OLD })
+    expect(result).toBe(path.resolve(OLD))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('is deprecated')
+  })
+
+  it('treats a whitespace-only old name as unset: default path, no warning', async () => {
+    const { result, warnings } = await resolveWith({ SSH_MCP_SERVERS_PATH: '   ' })
+    expect(result).toBe(path.resolve('./servers.json'))
+    expect(warnings).toEqual([])
+  })
+
+  it('uses a space-padded value verbatim (not trimmed)', async () => {
+    const padded = ` ${NEW} `
+    const { result } = await resolveWith({ TENSHI_MCP_SERVERS_PATH: padded })
+    expect(result).toBe(path.resolve(padded))
+    expect(result).not.toBe(path.resolve(NEW))
+  })
+
   it('defaults to ./servers.json when neither is set, without a warning', async () => {
     const { result, warnings } = await resolveWith({})
     expect(result).toBe(path.resolve('./servers.json'))

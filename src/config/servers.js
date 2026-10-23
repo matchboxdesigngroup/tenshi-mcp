@@ -29,11 +29,20 @@ export const SERVERS_PATH_ENV = 'TENSHI_MCP_SERVERS_PATH'
 export const DEPRECATED_SERVERS_PATH_ENV = 'SSH_MCP_SERVERS_PATH'
 export const DEFAULT_SERVERS_PATH = './servers.json'
 
+/** @returns {string | undefined} the value unchanged, or undefined if empty or whitespace only */
+function nonBlank(value) {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
 /**
  * Resolve the registry path from the environment.
  *
  * TENSHI_MCP_SERVERS_PATH wins when set. The deprecated SSH_MCP_SERVERS_PATH
- * is used only when the new name is unset or empty. Either deprecated case
+ * is used only when the new name is unset or blank. A value that is empty or
+ * whitespace only counts as unset, so a blank new name cannot shadow a valid
+ * old one; any other value is used verbatim (not trimmed), because a path is
+ * taken literally and silently changing it would hide a config mistake
+ * instead of surfacing it as a missing file. Either deprecated case
  * emits one warning that names the variables, never their values. Warnings
  * go to stderr (console.warn): stdout carries the MCP stdio protocol.
  *
@@ -42,8 +51,8 @@ export const DEFAULT_SERVERS_PATH = './servers.json'
  * @returns {string} absolute path
  */
 export function resolveServersPath(env = process.env, warn = console.warn) {
-  const current = env[SERVERS_PATH_ENV]
-  const deprecated = env[DEPRECATED_SERVERS_PATH_ENV]
+  const current = nonBlank(env[SERVERS_PATH_ENV])
+  const deprecated = nonBlank(env[DEPRECATED_SERVERS_PATH_ENV])
   if (current) {
     if (deprecated) {
       warn(`${DEPRECATED_SERVERS_PATH_ENV} is ignored because ${SERVERS_PATH_ENV} is set; remove ${DEPRECATED_SERVERS_PATH_ENV}, it is removed in M5.`)
