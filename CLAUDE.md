@@ -1,4 +1,4 @@
-# ssh-triage-mcp
+# Tenshi-MCP
 
 Local MCP server (stdio transport) that SSHs into configured WordPress servers and exposes `read_log` and `read_file` tools for Claude triage sessions.
 
@@ -10,7 +10,7 @@ The tool layer is under security review. Do not expose this server to untrusted 
 
 ```bash
 npm install
-cp .env.example .env          # edit SSH_MCP_SERVERS_PATH if needed
+cp .env.example .env          # edit TENSHI_MCP_SERVERS_PATH if needed
 cp servers.json.example servers.json  # fill in real server details
 npm start
 ```
@@ -57,6 +57,7 @@ tests/
   executor.test.js      Unit: allowlist + timeout
   read-log.test.js      Unit: path resolution + output shape
   read-file.test.js     Unit: path confinement + traversal guard
+  server.test.js        Protocol: server name and tool list over stdio, env fallback
   audit-check.test.js   Unit: audit allowlist check
   integration.js        Manual: end-to-end SSH against real server
 ```
@@ -83,17 +84,18 @@ Add to `.claude/settings.json`:
 ```json
 {
   "mcpServers": {
-    "ssh-wp-tools": {
+    "tenshi-mcp": {
       "command": "node",
-      "args": ["/Users/lema/Projects/ssh-triage-mcp/src/index.js"],
+      "args": ["/path/to/tenshi-mcp/src/index.js"],
       "env": {
-        "SSH_MCP_SERVERS_PATH": "/Users/lema/Projects/ssh-triage-mcp/servers.json"
+        "TENSHI_MCP_SERVERS_PATH": "/path/to/tenshi-mcp/servers.json"
       }
     }
   }
 }
 ```
 
+Replace `/path/to/tenshi-mcp` with the absolute path of your checkout. `SSH_MCP_SERVERS_PATH` is the deprecated former name of `TENSHI_MCP_SERVERS_PATH`: still read when the new name is unset, with a startup warning on stderr; removed in M5.
 ## Docs
 
 - `docs/specs/` — implementation plan

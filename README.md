@@ -1,4 +1,4 @@
-# ssh-triage-mcp
+# Tenshi-MCP
 
 A local MCP server (stdio transport) that SSHs into configured WordPress servers and exposes two tools — `read_log` and `read_file` — for use in Claude triage sessions.
 
@@ -88,14 +88,16 @@ Multiple servers and multiple sites per server are supported.
 }
 ```
 
-### 3. Configure the `SSH_MCP_SERVERS_PATH` environment variable (optional)
+### 3. Configure the `TENSHI_MCP_SERVERS_PATH` environment variable (optional)
 
 By default the server loads `./servers.json` relative to the working directory. Override with:
 
 ```bash
 cp .env.example .env
-# edit .env: set SSH_MCP_SERVERS_PATH=/absolute/path/to/servers.json
+# edit .env: set TENSHI_MCP_SERVERS_PATH=/absolute/path/to/servers.json
 ```
+
+`TENSHI_MCP_SERVERS_PATH` was called `SSH_MCP_SERVERS_PATH` before the rename to Tenshi-MCP. The old name still works as a deprecated fallback: it is read only when `TENSHI_MCP_SERVERS_PATH` is unset, and the server prints a one-line warning on stderr at startup. If both are set, the new name wins and the warning says the old one is ignored. The old name is removed in M5; rename it wherever you set it (local `.env`, MCP registration `env` block, the environment of the process that spawns this server).
 
 ### 4. Register with Claude Code
 
@@ -104,11 +106,11 @@ Add the MCP server to your Claude Code settings. For project-scoped registration
 ```json
 {
   "mcpServers": {
-    "ssh-wp-tools": {
+    "tenshi-mcp": {
       "command": "node",
-      "args": ["/Users/yourname/Projects/ssh-triage-mcp/src/index.js"],
+      "args": ["/path/to/tenshi-mcp/src/index.js"],
       "env": {
-        "SSH_MCP_SERVERS_PATH": "/Users/yourname/Projects/ssh-triage-mcp/servers.json"
+        "TENSHI_MCP_SERVERS_PATH": "/path/to/tenshi-mcp/servers.json"
       }
     }
   }
@@ -121,7 +123,7 @@ Use absolute paths — relative paths break when Claude Code spawns the server f
 
 ### 5. Verify the connection
 
-Restart Claude Code and run `/mcp` in a new session. You should see `ssh-wp-tools` listed as connected with tools `read_log` and `read_file`.
+Restart Claude Code and run `/mcp` in a new session. You should see `tenshi-mcp` listed as connected with tools `read_log` and `read_file`.
 
 Test it:
 
@@ -246,7 +248,7 @@ Send a raw MCP message over stdin to verify the server starts and registers tool
 
 ```bash
 printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}\n{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n' \
-  | SSH_MCP_SERVERS_PATH=./servers.json node src/index.js
+  | TENSHI_MCP_SERVERS_PATH=./servers.json node src/index.js
 ```
 
 Expected: two JSON responses, the second containing a `tools` array with `read_log` and `read_file`.
@@ -270,6 +272,7 @@ tests/
   executor.test.js      Unit: allowlist + timeout
   read-log.test.js      Unit: path resolution + output shape
   read-file.test.js     Unit: path confinement + traversal guard
+  server.test.js        Protocol: server name and tool list over stdio, env fallback
   integration.js        Manual: end-to-end SSH against a real server
 ```
 
@@ -285,11 +288,11 @@ Graceful shutdown (`SIGINT` / `SIGTERM`) closes all open SSH connections before 
 
 ## Troubleshooting
 
-**`ssh-wp-tools` not listed in `/mcp`**  
+**`tenshi-mcp` not listed in `/mcp`**  
 Restart Claude Code after editing settings. Check that the path in `args` is absolute and the file exists.
 
 **`Error: Registry not initialized`**  
-The server process failed to start. Check that `SSH_MCP_SERVERS_PATH` points to a valid `servers.json`.
+The server process failed to start. Check that `TENSHI_MCP_SERVERS_PATH` points to a valid `servers.json`.
 
 **`Unknown server` or `No server configured for site`**  
 The site domain or server ID is not in `servers.json`. Check spelling — site keys are exact domain matches.

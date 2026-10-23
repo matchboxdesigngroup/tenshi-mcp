@@ -1,5 +1,7 @@
 # SSH WordPress MCP Server — Implementation Plan
 
+> **Rename note:** this plan was written before the project was renamed to Tenshi-MCP (tenshi#3). Package, server and registration names, the registry path variable (`TENSHI_MCP_SERVERS_PATH`, formerly `SSH_MCP_SERVERS_PATH`, still read as a deprecated fallback) and example paths are updated to the current names. The code samples show the plan, not the current code: see `src/config/servers.js` for how the path is resolved now.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a local MCP server (stdio transport) that SSHs into configured servers and exposes two tools — `read_log` and `read_file` — for reading WordPress logs and files during Claude triage sessions.
@@ -33,7 +35,7 @@ tests/
 tests/integration.js  Manual script — run directly against a real servers.json entry
 
 servers.json          (not committed) server registry
-.env                  SSH_MCP_SERVERS_PATH override
+.env                  TENSHI_MCP_SERVERS_PATH override
 package.json
 ```
 
@@ -48,7 +50,7 @@ package.json
 
 ```json
 {
-  "name": "ssh-wp-mcp",
+  "name": "tenshi-mcp",
   "version": "1.0.0",
   "type": "module",
   "main": "src/index.js",
@@ -103,7 +105,7 @@ git commit -m "chore: scaffold project with package.json and dependencies"
 - Create: `src/config/servers.js`
 - Create: `tests/config.test.js`
 
-The loader reads `servers.json` (path from `SSH_MCP_SERVERS_PATH` env var or `./servers.json`), validates the structure with Zod, and exports two lookup functions.
+The loader reads `servers.json` (path from `TENSHI_MCP_SERVERS_PATH` env var or `./servers.json`), validates the structure with Zod, and exports two lookup functions.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -121,12 +123,12 @@ function withServersFile(data, fn) {
   mkdirSync(dir, { recursive: true })
   const filePath = path.join(dir, 'servers.json')
   writeFileSync(filePath, JSON.stringify(data))
-  const original = process.env.SSH_MCP_SERVERS_PATH
-  process.env.SSH_MCP_SERVERS_PATH = filePath
+  const original = process.env.TENSHI_MCP_SERVERS_PATH
+  process.env.TENSHI_MCP_SERVERS_PATH = filePath
   try {
     return fn(filePath)
   } finally {
-    process.env.SSH_MCP_SERVERS_PATH = original ?? ''
+    process.env.TENSHI_MCP_SERVERS_PATH = original ?? ''
     rmSync(dir, { recursive: true })
   }
 }
@@ -247,7 +249,7 @@ const RegistrySchema = z.object({
 let registry = new Map()
 
 export function loadRegistry() {
-  const filePath = resolve(process.env.SSH_MCP_SERVERS_PATH || './servers.json')
+  const filePath = resolve(process.env.TENSHI_MCP_SERVERS_PATH || './servers.json')
   const raw = JSON.parse(readFileSync(filePath, 'utf8'))
   const parsed = RegistrySchema.parse(raw)
   registry = new Map(parsed.servers.map(s => [s.id, s]))
@@ -1014,7 +1016,7 @@ import { closeAll } from './ssh/client.js'
 loadRegistry()
 
 const server = new McpServer({
-  name: 'ssh-wp-tools',
+  name: 'tenshi-mcp',
   version: '1.0.0'
 })
 
@@ -1105,7 +1107,7 @@ Then start the server and send an MCP initialize message:
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}' | node src/index.js
 ```
 
-Expected: JSON response with `"result"` containing `serverInfo.name: "ssh-wp-tools"`. No crash.
+Expected: JSON response with `"result"` containing `serverInfo.name: "tenshi-mcp"`. No crash.
 
 - [ ] **Step 3: Verify tool list response**
 
@@ -1241,18 +1243,18 @@ Open (or create) `.claude/settings.json` in this project directory and add:
 ```json
 {
   "mcpServers": {
-    "ssh-wp-tools": {
+    "tenshi-mcp": {
       "command": "node",
       "args": ["<absolute-path-to-this-repo>/src/index.js"],
       "env": {
-        "SSH_MCP_SERVERS_PATH": "<absolute-path-to-this-repo>/servers.json"
+        "TENSHI_MCP_SERVERS_PATH": "<absolute-path-to-this-repo>/servers.json"
       }
     }
   }
 }
 ```
 
-Replace `<absolute-path-to-this-repo>` with the actual path (e.g. `/Users/lema/Projects/ssh-triage-mcp`).
+Replace `<absolute-path-to-this-repo>` with the actual path (e.g. `/path/to/tenshi-mcp`).
 
 - [ ] **Step 2: Restart Claude Code and verify tools appear**
 
@@ -1262,7 +1264,7 @@ In a new Claude Code session, type:
 /mcp
 ```
 
-Expected: `ssh-wp-tools` listed as connected, with tools `read_log` and `read_file`.
+Expected: `tenshi-mcp` listed as connected, with tools `read_log` and `read_file`.
 
 - [ ] **Step 3: Ask Claude to read a log**
 
@@ -1278,7 +1280,7 @@ Expected: Claude calls the tool and returns formatted log output. No permission 
 
 ```bash
 git add .claude/settings.json
-git commit -m "chore: register ssh-wp-tools MCP server in project settings"
+git commit -m "chore: register tenshi-mcp MCP server in project settings"
 ```
 
 ---

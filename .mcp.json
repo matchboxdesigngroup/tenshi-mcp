@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "ssh-wp-tools": {
+    "tenshi-mcp": {
       "command": "node",
-      "args": ["/Users/lema/Projects/ssh-triage-mcp/src/index.js"],
+      "args": ["/path/to/tenshi-mcp/src/index.js"],
       "env": {
-        "SSH_MCP_SERVERS_PATH": "/Users/lema/Projects/ssh-triage-mcp/servers.json"
+        "TENSHI_MCP_SERVERS_PATH": "/path/to/tenshi-mcp/servers.json"
       }
     }
   }
