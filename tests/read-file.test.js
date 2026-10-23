@@ -15,7 +15,8 @@ const CANARIES = [
   '/srv/canary/secret.txt',
   '/home/other/uploads/secret.txt',
   '/var/www/example.com/public-backup/wp-config.php',
-  '/etc/fake-passwd'
+  '/etc/fake-passwd',
+  '/srv/canary/odd2.php'
 ]
 const CONFIG = '<?php\n// fake configuration used only by the tests\n'
 
@@ -40,6 +41,11 @@ beforeAll(async () => {
       [`${ROOT}/wp-content/endless.bin`]: { endless: true, size: 10 * 1024 * 1024 },
       [`${ROOT}/wp-content/slow.txt`]: { content: 'never served', hangRead: true },
       [`${ROOT}/wp-content/type-change.txt`]: { content: 'SWAPPED-CONTENT', fstatType: 'fifo' },
+      // realpath answers with a `..` that only looks inside the root
+      // lexically; the server resolves it through the link to outside.
+      [`${ROOT}/wp-content/odd.php`]: { content: 'x', realpathReply: `${ROOT}/wp-content/out/../odd2.php` },
+      [`${ROOT}/wp-content/out`]: { symlink: '/srv/canary/dir' },
+      '/srv/canary/dir/placeholder.txt': { content: 'x' },
 
       '/var/www/current': { symlink: '/var/www/releases/1' },
       '/var/www/releases/1/index.php': { content: '<?php // release 1' },
@@ -152,6 +158,12 @@ describe('read_file confinement', () => {
     const err = await failure({ site: 'example.com', path })
     expect(err.message).toBe(NOT_AVAILABLE)
     expect(fake.events.opens).toEqual([])
+  })
+
+  it('refuses a realpath reply that is not canonical instead of normalising it', async () => {
+    const err = await failure({ site: 'example.com', path: 'wp-content/odd.php' })
+    expect(err.message).toBe(NOT_AVAILABLE)
+    expect(fake.events.ops.filter(o => o.op === 'OPEN' || o.op === 'LSTAT')).toEqual([])
   })
 
   it('refuses a file whose type on the open handle is not regular, closes the handle and reads nothing', async () => {

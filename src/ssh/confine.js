@@ -17,15 +17,35 @@ function notAvailable() {
   return new ToolError(ERROR_CODES.NOT_AVAILABLE)
 }
 
-/** @param {string} p absolute POSIX path */
+/**
+ * Path segments of an absolute POSIX path, or null when a segment is `.` or
+ * `..`. Nothing is normalised: a lexical `..` could disagree with what the
+ * server resolves physically, so such paths are refused, not collapsed.
+ * Empty segments (a trailing or doubled slash) carry no meaning and are
+ * skipped.
+ * @param {string} p
+ */
 function segments(p) {
-  return posix.normalize(p).split('/').filter(s => s !== '' && s !== '.')
+  const parts = p.split('/').filter(s => s !== '')
+  return parts.some(s => s === '.' || s === '..') ? null : parts
+}
+
+/**
+ * True for an absolute path in canonical form, as a conforming SFTP
+ * `realpath` returns it: no `.`, `..` or empty segments, no trailing slash,
+ * no NUL. `/` itself is canonical.
+ * @param {unknown} p
+ */
+export function isCanonicalPath(p) {
+  if (typeof p !== 'string' || !p.startsWith('/') || p.includes('\0')) return false
+  if (p === '/') return true
+  return p.slice(1).split('/').every(s => s !== '' && s !== '.' && s !== '..')
 }
 
 /**
  * True when `target` is strictly below `root`, comparing whole path segments
  * (so `/srv/site` does not contain `/srv/site-backup/x`). Both must be
- * absolute POSIX paths; anything else is false.
+ * absolute POSIX paths without `.` or `..` segments; anything else is false.
  * @param {string} root
  * @param {string} target
  */
@@ -34,6 +54,7 @@ export function isStrictlyWithin(root, target) {
   if (!posix.isAbsolute(root) || !posix.isAbsolute(target)) return false
   const r = segments(root)
   const t = segments(target)
+  if (r === null || t === null) return false
   if (t.length <= r.length) return false
   for (let i = 0; i < r.length; i++) {
     if (r[i] !== t[i]) return false
@@ -76,8 +97,12 @@ export function confineLexically(root, relativePath) {
 export async function openConfinedFile(session, root, relativePath) {
   const normalised = confineLexically(root, relativePath)
 
+  // The server's answers are checked as given: a reply that is not in
+  // canonical form is refused rather than normalised here.
   const canonicalRoot = await session.realpath(root)
+  if (!isCanonicalPath(canonicalRoot)) throw notAvailable()
   const canonicalTarget = await session.realpath(posix.join(canonicalRoot, normalised))
+  if (!isCanonicalPath(canonicalTarget)) throw notAvailable()
   if (!isStrictlyWithin(canonicalRoot, canonicalTarget)) throw notAvailable()
 
   // realpath resolved every link, so the target itself must not be a link

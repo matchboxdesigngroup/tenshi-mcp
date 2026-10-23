@@ -11,6 +11,8 @@
 //                                            return the full requested length
 //   { content, hangRead: true }              file whose READs never answer
 //   { hangRealpath: true }                   REALPATH on this path never answers
+//   { content, realpathReply: '/a/b/../c' }  REALPATH on this path answers with
+//                                            the given string verbatim
 //   { content, fstatType: 'fifo' }           STAT/LSTAT report a regular file,
 //                                            FSTAT on the open handle a FIFO
 //                                            (the type changed after the check)
@@ -70,7 +72,9 @@ class FakeFs {
    */
   resolve(p, followLast = true, depth = 0) {
     if (depth > 32) throw new Error('ELOOP')
-    const parts = posix.normalize(p.startsWith('/') ? p : '/' + p).split('/').filter(Boolean)
+    // Walk the path as given: `..` after a symlink goes to the link target's
+    // parent, as on a real server, not to the lexical parent.
+    const parts = (p.startsWith('/') ? p : '/' + p).split('/').filter(Boolean)
     let cur = []
     for (let i = 0; i < parts.length; i++) {
       const seg = parts[i]
@@ -158,7 +162,9 @@ export async function startFakeSftpServer({ files }) {
     sftp.on('REALPATH', (reqid, p) => {
       record('REALPATH', { path: p })
       const lexical = posix.normalize(p.startsWith('/') ? p : '/' + p)
-      if (fsTree.entries.get(lexical)?.hangRealpath) return // never answer
+      const entry = fsTree.entries.get(lexical)
+      if (entry?.hangRealpath) return // never answer
+      if (entry?.realpathReply) return sftp.name(reqid, [{ filename: entry.realpathReply, longname: entry.realpathReply, attrs: {} }])
       let resolved
       try { resolved = fsTree.resolve(p, true) } catch { return sftp.status(reqid, STATUS_CODE.FAILURE) }
       if (resolved === undefined) return sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE)

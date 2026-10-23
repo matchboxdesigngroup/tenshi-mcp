@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isStrictlyWithin, confineLexically } from '../src/ssh/confine.js'
+import { isStrictlyWithin, isCanonicalPath, confineLexically } from '../src/ssh/confine.js'
 import { ERROR_CODES } from '../src/errors.js'
 
 const ROOT = '/var/www/example.com/public'
@@ -19,7 +19,11 @@ describe('isStrictlyWithin (path-segment comparison)', () => {
     [ROOT, '/etc/passwd', false],
     [ROOT, `${ROOT}/../secret`, false],
     [ROOT, 'wp-config.php', false],
-    ['relative/root', 'relative/root/x', false]
+    ['relative/root', 'relative/root/x', false],
+    // `.` and `..` are refused, never collapsed.
+    [ROOT, `${ROOT}/wp-content/link/../wp-config.php`, false],
+    [ROOT, `${ROOT}/./wp-config.php`, false],
+    [`${ROOT}/wp-content/..`, `${ROOT}/wp-config.php`, false]
   ])('root %s, target %s -> %s', (root, target, expected) => {
     expect(isStrictlyWithin(root, target)).toBe(expected)
   })
@@ -27,6 +31,25 @@ describe('isStrictlyWithin (path-segment comparison)', () => {
   it('rejects non-string input', () => {
     expect(isStrictlyWithin(undefined, '/x')).toBe(false)
     expect(isStrictlyWithin(ROOT, undefined)).toBe(false)
+  })
+})
+
+describe('isCanonicalPath', () => {
+  it.each([
+    ['/', true],
+    [ROOT, true],
+    [`${ROOT}/wp-config.php`, true],
+    [`${ROOT}/`, false],
+    [`${ROOT}//wp-config.php`, false],
+    [`${ROOT}/./wp-config.php`, false],
+    [`${ROOT}/x/../wp-config.php`, false],
+    [`${ROOT}/..`, false],
+    ['relative/path', false],
+    ['', false],
+    [`${ROOT}/a\0b`, false],
+    [undefined, false]
+  ])('%j -> %s', (p, expected) => {
+    expect(isCanonicalPath(p)).toBe(expected)
   })
 })
 
