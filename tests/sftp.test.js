@@ -129,6 +129,15 @@ describe('read-only SFTP session facade', () => {
     expect(fake.events.connections - before).toBeLessThanOrEqual(1)
   })
 
+  it('shares one connection attempt between concurrent first calls', async () => {
+    closeAll()
+    const before = fake.events.connections
+    const results = await Promise.all([1, 2, 3].map(() => withSftpSession(SERVER_ID, s => s.realpath(FILE))))
+    expect(results).toEqual([FILE, FILE, FILE])
+    expect(fake.events.connections - before).toBe(1)
+    await fake.waitFor(() => fake.openSftpSessions() === 0)
+  })
+
   it('refuses an unknown server id before any network activity', async () => {
     const before = fake.events.connections
     const err = await withSftpSession('no-such-server', s => s.realpath('/')).catch(e => e)
