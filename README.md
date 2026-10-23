@@ -1,6 +1,6 @@
 # Tenshi-MCP
 
-A local MCP server (stdio transport) that SSHs into configured WordPress servers and exposes two tools — `read_log` and `read_file` — for use in Claude triage sessions.
+A local MCP server (stdio transport) that connects to configured WordPress servers over SSH and exposes two read-only tools — `read_log` and `read_file` — for use in Claude triage sessions. Both tools read over SFTP; neither runs a remote command.
 
 ## Status
 
@@ -8,7 +8,7 @@ The tool layer is under security review. Do not expose this server to untrusted 
 
 ## Overview
 
-During a WordPress incident, you ask Claude things like "show me the last 50 error log lines for example.com" or "read wp-config.php on that server." This MCP server handles the SSH connection, enforces a strict security model, and returns structured output back to Claude.
+During a WordPress incident, you ask Claude things like "show me the last 50 error log lines for example.com" or "read index.php on that site." This MCP server handles the SSH connection, reads the file over SFTP within the configured site directories, applies fixed size and time limits, and returns structured output back to Claude.
 
 **Transport:** stdio (spawned by Claude Code as a child process)  
 **Node.js:** ≥20 (ESM)  
@@ -21,7 +21,7 @@ During a WordPress incident, you ask Claude things like "show me the last 50 err
 ### Prerequisites
 
 - Node.js ≥20
-- SSH key with access to your WordPress server(s)
+- SSH key with access to your WordPress server(s), for an account with SFTP enabled (the tools use only the SFTP subsystem; a read-only account is recommended)
 - Claude Code CLI
 
 ### 1. Install dependencies
@@ -146,22 +146,28 @@ Use read_log to fetch the last 10 lines of the error log for example.com
 
 ### `read_log`
 
-Tails lines from a WordPress log file on a configured server.
+Returns the last lines of a WordPress log file for a configured site.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `site` | string | yes | — | Site domain, e.g. `example.com` |
 | `log` | `debug` \| `error` \| `access` | yes | — | Log type |
-| `lines` | number | no | 50 | Lines to tail (hard cap: 500) |
-| `filter` | string | no | — | Case-insensitive grep filter |
+| `lines` | number | no | 50 | Lines to return from the end of the log (hard cap: 500) |
+| `filter` | string | no | — | Case-insensitive substring, matched literally (at most 200 characters) |
 
-Log path resolution:
+Log path resolution (from the registry only; the `log` value selects one of these):
 
-| Log type | Resolved path |
-|---|---|
-| `debug` | `{wordpressRoot}/wp-content/debug.log` |
-| `error` | `{logDir}/{site}.error.log` |
-| `access` | `{logDir}/{site}.access.log` |
+| Log type | Path | Must resolve inside |
+|---|---|---|
+| `debug` | `{wordpressRoot}/wp-content/debug.log` | `wordpressRoot` |
+| `error` | `{logDir}/{site}.error.log` | `logDir` |
+| `access` | `{logDir}/{site}.access.log` | `logDir` |
+
+How it reads:
+
+- Only the last 256 KB of the log are read (one bounded SFTP read from the end of the file). Older content is neither returned nor searched. When the window starts mid-file, its first, possibly partial, line is dropped.
+- The filter runs in the server process on each line as a plain substring test, ignoring case. It is never turned into a regular expression or sent to the remote server, so characters such as `.`, `*`, `(` or `|` match themselves.
+- The last `lines` matching lines are returned. Lines longer than 2000 characters are cut and end with ` [line truncated]`. The returned content is capped at 51200 bytes (UTF-8); when the cap is hit, the oldest selected lines are dropped.
 
 **Example response:**
 
@@ -169,21 +175,24 @@ Log path resolution:
 {
   "site": "example.com",
   "log": "error",
-  "resolvedPath": "/var/log/nginx/example.com.error.log",
-  "lineCount": 50,
+  "requestedLines": 50,
+  "returnedLines": 50,
   "content": "2026/06/04 14:23:11 [error] ...",
+  "truncated": { "window": true, "longLines": 0, "bytes": false },
   "retrievedAt": "2026-06-04T14:23:15.000Z"
 }
 ```
 
+`truncated.window` means the log is larger than the 256 KB window; `truncated.longLines` counts cut lines; `truncated.bytes` means older lines were dropped to stay under the byte cap.
+
 ### `read_file`
 
-Reads a file within the WordPress root of a configured site.
+Reads the start of a regular file under the WordPress root of a configured site.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `site` | string | yes | — | Site domain, e.g. `example.com` |
-| `path` | string | yes | — | Relative path within WordPress root, e.g. `wp-config.php` |
+| `path` | string | yes | — | Path relative to the WordPress root, e.g. `wp-content/plugins/example/readme.txt` (at most 1024 characters) |
 | `maxBytes` | number | no | 10000 | Max bytes to read (hard cap: 51200) |
 
 **Example response:**
@@ -191,33 +200,49 @@ Reads a file within the WordPress root of a configured site.
 ```json
 {
   "site": "example.com",
-  "requestedPath": "wp-config.php",
-  "resolvedPath": "/var/www/example.com/public/wp-config.php",
-  "content": "<?php\n/** WordPress config */\n...",
+  "path": "wp-content/plugins/example/readme.txt",
+  "content": "=== Example ===\n...",
+  "bytes": 1234,
   "truncated": false,
   "retrievedAt": "2026-06-04T14:23:20.000Z"
 }
 ```
 
-`truncated: true` means the file was larger than `maxBytes` and was cut off.
+`path` is the file's canonical path relative to the canonical WordPress root (symlinks resolved). `truncated: true` means the file is longer than `maxBytes` and was cut off.
+
+### Errors
+
+Tool failures return a fixed code and message, never the arguments, a server path or remote error text:
+
+| Code | Meaning |
+|---|---|
+| `E_NOT_AVAILABLE` | Unknown site, path outside the allowed directory, missing file, not a regular file, or permission denied. These cases are deliberately indistinguishable. |
+| `E_INVALID_INPUT` | The arguments failed validation inside the tool. Arguments that fail the MCP schema (for example an unknown `log` value) are rejected earlier by the MCP SDK with its own validation message. |
+| `E_TIMEOUT` | The call did not finish within 10 seconds; its SFTP channel was closed. |
+| `E_REMOTE` | The connection or the SFTP session failed. |
+| `E_INTERNAL` | Unexpected failure inside the tool. |
 
 ---
 
 ## Security model
 
-Three enforcement layers, each failing closed and independent:
+The tools read over SFTP only. The design follows the platform ADR on tool-layer remote access (kept in the private platform repository); [ADR-002](docs/adrs/ADR-002-command-security-model.md) records the earlier command-based model, which is superseded in part.
 
-**Layer 1 — Host allowlist** (`src/ssh/client.js`): Only hosts defined in `servers.json` are connectable. `getConnection` validates the server ID before any network activity.
+**Registry allowlist** (`src/config/servers.js`, `src/ssh/client.js`): only servers and sites defined in `servers.json` are reachable. Unknown sites are refused before any network activity.
 
-**Layer 2 — Command allowlist** (`src/ssh/executor.js`): Only `tail`, `head`, `grep`, `cat`, `ls` may execute. The check happens before the SSH connection is opened. Binary is parsed as `argv[0]` (whitespace split) to avoid shell metacharacter bypass.
+**No remote commands** (`src/ssh/sftp.js`): tools get a read-only session facade with exactly `realpath`, `lstat`, open for reading, `fstat`, bounded `read` and `close`. The facade never exposes the SSH connection, an exec or shell channel, or any SFTP write, rename or remove operation, and no tool builds a command string. `src/ssh/client.js` is the only module that uses the SSH library. The unit tests run every tool against an in-process SSH server that records requests and fail if it ever receives an exec, shell or other non-SFTP request.
 
-**Layer 3 — Path confinement** (`src/tools/read-file.js`): `path.resolve(wordpressRoot, userPath)` is computed and the result must start with `wordpressRoot`. Blocks `../` traversal before the command string is built.
+**Path confinement** (`src/ssh/confine.js`), for `read_file` and for every log read by `read_log`:
 
-**Hard caps** enforced regardless of what Claude requests:
-- `read_log`: 500 lines max
-- `read_file`: 51200 bytes (50 KB) max
+1. Before any network activity, the relative path must stay under the configured root after normalisation; absolute paths, NUL bytes and paths over 1024 characters are refused.
+2. On the server, the root and the target are resolved with SFTP `realpath` (symlinks followed). The target must lie strictly under the canonical root, compared by whole path segment, not by string prefix.
+3. The target must be a regular file (`lstat` before open, `fstat` on the open handle).
 
-A bypass in any one layer does not bypass the others — write operations are structurally impossible.
+**Limits:** `read_log` returns at most 500 lines and 51200 bytes from the last 256 KB of the log; `read_file` returns at most 51200 bytes. Each call has a 10-second deadline covering connect, path checks and reads; on expiry the SFTP channel is closed and the call returns `E_TIMEOUT`.
+
+**Errors** are the fixed codes listed under [Errors](#errors).
+
+**Not covered yet:** the SFTP account's own rights are not narrowed by this server, so use a dedicated read-only account where you control the host. Further hardening (host-key pinning, a sensitive-file policy with redaction, an audit log) is in progress and tracked privately; until it lands, keep to the status note at the top of this file.
 
 ---
 
@@ -230,26 +255,31 @@ npm test               # run all unit tests once
 npm run test:watch     # watch mode
 ```
 
-Tests use `vitest` with mocked SSH — no real server is needed. All five test files cover a specific module:
+Tests use `vitest`. No real server is needed: the SFTP tests start an in-process SSH server built on `ssh2`'s server mode (`tests/helpers/fake-sftp-server.js`) on `127.0.0.1` with an ephemeral port and generated keys, serving a small virtual file tree.
 
 | Test file | Covers |
 |---|---|
 | `tests/config.test.js` | Registry loading and Zod validation |
-| `tests/client.test.js` | Host allowlist guard |
-| `tests/executor.test.js` | Command allowlist + timeout |
-| `tests/read-log.test.js` | Path resolution and output shape |
-| `tests/read-file.test.js` | Path confinement and traversal guard |
+| `tests/client.test.js` | Registry guard for SFTP channels, host-key verification seam |
+| `tests/sftp.test.js` | Read-only session facade, per-call timeout, session close, read budget |
+| `tests/confine.test.js` | Lexical confinement and path-segment comparison |
+| `tests/read-log.test.js` | Log selection, tail window, line and byte caps, literal filter, confinement, timeout |
+| `tests/read-file.test.js` | Confinement (traversal, symlinks, sibling prefixes), byte cap, timeout |
+| `tests/errors.test.js` | Fixed error codes and messages |
+| `tests/boundaries.test.js` | Module boundaries: only `src/ssh/client.js` uses the SSH library, tools use the facade |
+| `tests/server.test.js` | Protocol: server name, tool list, fixed refusal over stdio, env fallback |
+| `tests/audit-check.test.js` | Audit allowlist check |
 
 ### Manual integration test
 
-Requires a real `servers.json` with valid SSH credentials:
+Requires a real `servers.json` with valid SSH credentials and SFTP enabled:
 
 ```bash
 node tests/integration.js <serverId> <siteDomain>
 # e.g.: node tests/integration.js myserver example.com
 ```
 
-The script exercises both tools end-to-end and verifies that a path traversal attempt is blocked.
+The script exercises both tools end-to-end over SFTP and verifies that a path traversal attempt is blocked.
 
 ### Smoke-testing the MCP server directly
 
@@ -270,26 +300,34 @@ Expected: two JSON responses, the second containing a `tools` array with `read_l
 src/
   index.js              MCP entry point — registers tools, starts stdio transport
   config/servers.js     Load + validate servers.json (Zod), lookup functions
-  ssh/client.js         Connection pool keyed by server ID, 5-min idle timeout
-  ssh/executor.js       runCommand — command allowlist + 10s timeout
+  errors.js             Fixed error codes returned to the model
+  ssh/client.js         Connection pool keyed by server ID, 5-min idle timeout, SFTP channels only
+  ssh/sftp.js           Read-only SFTP session facade with a per-call deadline
+  ssh/confine.js        Lexical and canonical (realpath) path confinement
+  tools/site.js         Registry lookup for tool calls
   tools/read-log.js     read_log tool handler
   tools/read-file.js    read_file tool handler
 
 tests/
+  helpers/fake-sftp-server.js  In-process SSH/SFTP server fake (ssh2 server mode)
   config.test.js        Unit: registry validation
-  client.test.js        Unit: allowlist guard
-  executor.test.js      Unit: allowlist + timeout
-  read-log.test.js      Unit: path resolution + output shape
-  read-file.test.js     Unit: path confinement + traversal guard
-  server.test.js        Protocol: server name and tool list over stdio, env fallback
-  integration.js        Manual: end-to-end SSH against a real server
+  client.test.js        Unit: registry guard, host-key seam
+  sftp.test.js          Unit: session facade, timeout, session close
+  confine.test.js       Unit: path confinement
+  read-log.test.js      Unit: read_log against the fake
+  read-file.test.js     Unit: read_file against the fake
+  errors.test.js        Unit: error codes
+  boundaries.test.js    Unit: module boundaries of the SFTP layer
+  server.test.js        Protocol: server name, tool list, refusal over stdio, env fallback
+  audit-check.test.js   Unit: audit allowlist check
+  integration.js        Manual: end-to-end SFTP against a real server
 ```
 
 ---
 
 ## Connection behavior
 
-SSH connections are pooled per server ID with a 5-minute idle timeout. If a connection has been idle for 5 minutes it is closed and a new one is opened on the next tool call. There is no persistent daemon — the process lives only while Claude Code has it spawned.
+SSH connections are pooled per server ID with a 5-minute idle timeout. If a connection has been idle for 5 minutes it is closed and a new one is opened on the next tool call. Concurrent first calls to the same server share one connection attempt. Each tool call opens its own SFTP channel on the pooled connection and closes it when the call ends, fails or times out. There is no persistent daemon — the process lives only while Claude Code has it spawned.
 
 Graceful shutdown (`SIGINT` / `SIGTERM`) closes all open SSH connections before exiting.
 
@@ -303,17 +341,11 @@ Restart Claude Code after editing settings. Check that the path in `args` is abs
 **`Error: Registry not initialized`**  
 The server process failed to start. Check that `TENSHI_MCP_SERVERS_PATH` points to a valid `servers.json`.
 
-**`Unknown server` or `No server configured for site`**  
-The site domain or server ID is not in `servers.json`. Check spelling — site keys are exact domain matches.
+**`E_NOT_AVAILABLE`**  
+The site is not in `servers.json` (site keys are exact domain matches), or the path does not resolve to a regular file inside the allowed directory (`wordpressRoot` for `read_file` and the debug log, `logDir` for error and access logs), or the account cannot read it. The tool does not say which, by design. Use relative paths only (e.g. `wp-content/plugins/example/readme.txt`). A log file that is a symlink to a location outside its directory is refused.
 
-**`Command not allowed`**  
-The executor rejected a command. Only `tail`, `head`, `grep`, `cat`, `ls` are permitted.
-
-**`Path escapes WordPress root`**  
-The path passed to `read_file` resolves outside `wordpressRoot`. Use relative paths only (e.g. `wp-config.php`, `wp-content/uploads`).
-
-**SSH connection refused / timeout**  
-Verify the host, port, user, and private key path in `servers.json`. Test manually: `ssh -i ~/.ssh/id_rsa -p 22 deploy@1.2.3.4`.
+**`E_TIMEOUT` or `E_REMOTE`**  
+The connection, the SFTP subsystem or a read failed or took longer than 10 seconds. Verify the host, port, user, and private key path in `servers.json`, and that SFTP is enabled for the account. Test manually: `sftp -i /path/to/key -P 22 deploy@192.0.2.10`.
 
 ---
 
@@ -321,4 +353,4 @@ Verify the host, port, user, and private key path in `servers.json`. Test manual
 
 - `docs/specs/` — implementation plan
 - `docs/adrs/ADR-001-server-registry-design.md` — why `servers.json` is structured the way it is
-- `docs/adrs/ADR-002-command-security-model.md` — rationale for the three-layer security model
+- `docs/adrs/ADR-002-command-security-model.md` — the original command-based security model; superseded in part by the SFTP model above (see the note in the ADR)
