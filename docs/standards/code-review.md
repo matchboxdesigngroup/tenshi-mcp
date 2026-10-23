@@ -7,7 +7,7 @@ Reviews catch bugs and keep the security model intact. They are not style debate
 ## Who Reviews
 
 - Reviewers are always fresh agents or people; authors never review their own work.
-- Anything that decides who can read or do what (MCP tools and transport, command allowlist, path confinement, auth, secrets, concurrency) gets an Opus high reviewer. See the risk rule in [CONTRIBUTING.md](../../CONTRIBUTING.md).
+- Anything that decides who can read or do what (MCP tools and transport, the SFTP access layer, path confinement, auth, secrets, concurrency) gets an Opus high reviewer. See the risk rule in [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 ## Reviewer Responsibilities
 
@@ -28,10 +28,10 @@ Use [CLAUDE.md](../../CLAUDE.md) and the ADRs in [docs/adrs/](../adrs/) as the r
 
 ### Security model
 - [ ] Host access still limited to servers in the registry (`src/config/servers.js`, `src/ssh/client.js`).
-- [ ] Commands run through `src/ssh/executor.js` only, with the allowlist unchanged or deliberately and explicitly extended.
-- [ ] `read_file` paths still confined to the configured WordPress root; traversal cases tested.
-- [ ] Output caps (line and byte limits) still enforced server-side.
-- [ ] No user-controlled input reaches a shell command without validation.
+- [ ] Remote access goes through the read-only SFTP facade (`src/ssh/sftp.js`) only: no exec, shell or write request, no command string, and no tool imports `src/ssh/client.js`, `node-ssh` or `ssh2`.
+- [ ] Paths read by any tool (including log paths) still confined: lexical check, SFTP realpath, path-segment comparison with the canonical root, regular file only; traversal and symlink cases tested against the fake server.
+- [ ] Output caps (line and byte limits) and the per-call timeout still enforced in this server, with the SFTP channel closed on timeout.
+- [ ] Caller input never forms a command string, a regular expression or a server path; tool errors use the fixed codes in `src/errors.js` and do not echo input.
 
 ### Architecture fit
 - [ ] New tools live in `src/tools/` and are registered in `src/index.js`.

@@ -60,6 +60,25 @@ describe('MCP server over stdio', () => {
     }
   }, 20000)
 
+  it('returns the fixed refusal for an unknown site without echoing the arguments', async () => {
+    // The site is not in the registry, so no SSH connection is attempted.
+    const { client } = await connect({ TENSHI_MCP_SERVERS_PATH: serversPath })
+    try {
+      for (const [name, args] of [
+        ['read_file', { site: 'unknown-marker.example', path: 'path-marker.php' }],
+        ['read_log', { site: 'unknown-marker.example', log: 'debug', lines: 5, filter: 'filter-marker' }]
+      ]) {
+        const result = await client.callTool({ name, arguments: args })
+        expect(result.isError).toBe(true)
+        expect(result.content).toEqual([
+          { type: 'text', text: 'Error: E_NOT_AVAILABLE: The requested resource is not available.' }
+        ])
+      }
+    } finally {
+      await client.close()
+    }
+  }, 20000)
+
   it('starts with only the deprecated SSH_MCP_SERVERS_PATH and warns on stderr', async () => {
     const { client, getStderr } = await connect({ SSH_MCP_SERVERS_PATH: serversPath })
     try {
