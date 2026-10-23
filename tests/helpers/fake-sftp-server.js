@@ -26,6 +26,21 @@ const S_IFLNK = 0o120000
 
 export const USERNAME = 'tenshi-test'
 
+/**
+ * ssh2's generateKeyPairSync('ed25519') strips leading zero bytes from the
+ * public key, so about one key in 256 does not parse. Generate until both
+ * halves parse, so the fake never fails at random.
+ */
+function generateUsableKeyPair() {
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const pair = utils.generateKeyPairSync('ed25519')
+    if (!(utils.parseKey(pair.private) instanceof Error) && !(utils.parseKey(pair.public) instanceof Error)) {
+      return pair
+    }
+  }
+  throw new Error('could not generate a usable test key')
+}
+
 class FakeFs {
   constructor(entries) {
     this.entries = new Map()
@@ -92,8 +107,8 @@ class FakeFs {
  */
 export async function startFakeSftpServer({ files }) {
   const fsTree = new FakeFs(files)
-  const hostKey = utils.generateKeyPairSync('ed25519')
-  const clientKey = utils.generateKeyPairSync('ed25519')
+  const hostKey = generateUsableKeyPair()
+  const clientKey = generateUsableKeyPair()
   const keyDir = mkdtempSync(join(tmpdir(), 'tenshi-mcp-fake-'))
   const clientKeyPath = join(keyDir, 'client_key')
   writeFileSync(clientKeyPath, clientKey.private)
@@ -113,6 +128,8 @@ export async function startFakeSftpServer({ files }) {
   }
 
   const clients = new Set()
+  // When set, authentication waits until the gate resolves (see holdAuthentication).
+  let authGate = null
 
   function record(op, extra = {}) {
     events.ops.push({ op, ...extra })
@@ -218,9 +235,10 @@ export async function startFakeSftpServer({ files }) {
     clients.add(client)
     client.on('error', () => {})
     client.on('close', () => clients.delete(client))
-    client.on('authentication', ctx => {
-      if (ctx.username === USERNAME && ctx.method === 'publickey') return ctx.accept()
-      ctx.reject(['publickey'])
+    client.on('authentication', async ctx => {
+      if (ctx.username !== USERNAME || ctx.method !== 'publickey') return ctx.reject(['publickey'])
+      if (authGate) await authGate
+      ctx.accept()
     })
     client.on('ready', () => {
       client.on('request', (accept, reject, name) => {
@@ -256,6 +274,14 @@ export async function startFakeSftpServer({ files }) {
     clientKeyPath,
     clientPrivateKey: clientKey.private,
     events,
+    /** Hold every authentication until the returned function is called. */
+    holdAuthentication() {
+      let release
+      authGate = new Promise(resolve => { release = resolve })
+      return () => { authGate = null; release() }
+    },
+    /** Count of SSH connections currently open. */
+    openConnections: () => clients.size,
     /** Count of SFTP sessions currently open. */
     openSftpSessions: () => events.sftpSessionsOpened - events.sftpSessionsClosed,
     /** Resolve when the predicate holds, or reject after `ms`. */

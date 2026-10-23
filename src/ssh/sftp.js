@@ -1,5 +1,5 @@
 import { openSftpChannel } from './client.js'
-import { ERROR_CODES, ToolError } from '../errors.js'
+import { ERROR_CODES, ToolError, toToolError } from '../errors.js'
 
 // Read-only SFTP layer. Tools get a session facade with exactly the
 // operations they need (realpath, lstat, open for reading, fstat, bounded
@@ -171,7 +171,8 @@ export async function withSftpSession(serverId, work, options = {}) {
       // Timed out while connecting or opening the channel: close the channel
       // if it still arrives.
       opening.then(ch => { try { ch.end() } catch { /* already gone */ } }, () => {})
-      throw err
+      // Connection and channel failures are remote errors.
+      throw err instanceof ToolError ? err : new ToolError(ERROR_CODES.REMOTE, { cause: err })
     }
 
     const { session, close } = createSession(channel, deadline, limits)
@@ -185,8 +186,9 @@ export async function withSftpSession(serverId, work, options = {}) {
       close()
     }
   } catch (err) {
-    if (err instanceof ToolError) throw err
-    throw new ToolError(ERROR_CODES.REMOTE, { cause: err })
+    // The facade already maps its own failures; anything else thrown by the
+    // work is a bug in this server.
+    throw toToolError(err)
   } finally {
     deadline.clear()
   }

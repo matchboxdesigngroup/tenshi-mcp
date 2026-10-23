@@ -87,10 +87,13 @@ describe('read-only SFTP session facade', () => {
     await fake.waitFor(() => fake.openSftpSessions() === 0)
   })
 
-  it('closes the SFTP session when the work fails', async () => {
-    await expect(withSftpSession(SERVER_ID, async () => {
-      throw new Error('boom')
-    })).rejects.toBeInstanceOf(ToolError)
+  it('closes the SFTP session when the work fails and reports a plain error as E_INTERNAL', async () => {
+    const err = await withSftpSession(SERVER_ID, async () => {
+      throw new Error('boom /srv/data')
+    }).catch(e => e)
+    expect(err).toBeInstanceOf(ToolError)
+    expect(err.code).toBe(ERROR_CODES.INTERNAL)
+    expect(err.message).not.toContain('/srv/data')
     await fake.waitFor(() => fake.openSftpSessions() === 0)
   })
 
@@ -136,6 +139,20 @@ describe('read-only SFTP session facade', () => {
     expect(results).toEqual([FILE, FILE, FILE])
     expect(fake.events.connections - before).toBe(1)
     await fake.waitFor(() => fake.openSftpSessions() === 0)
+  })
+
+  it('closes a connection that completes after closeAll dropped it', async () => {
+    closeAll()
+    await fake.waitFor(() => fake.openConnections() === 0)
+    const before = fake.events.connections
+    const release = fake.holdAuthentication()
+    const pending = withSftpSession(SERVER_ID, s => s.realpath(FILE)).catch(e => e)
+    await fake.waitFor(() => fake.events.connections > before)
+    closeAll()
+    release()
+    const err = await pending
+    expect(err.code).toBe(ERROR_CODES.REMOTE)
+    await fake.waitFor(() => fake.openConnections() === 0)
   })
 
   it('refuses an unknown server id before any network activity', async () => {

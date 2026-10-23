@@ -80,6 +80,11 @@ async function acquire(serverId) {
     const created = { ready: null, ssh: null, timer: null }
     created.ready = connect(server).then(
       ssh => {
+        if (pool.get(serverId) !== created) {
+          // Dropped (closeAll or an error) while the handshake was running.
+          ssh.dispose()
+          throw new Error('connection discarded')
+        }
         created.ssh = ssh
         // After the handshake node-ssh no longer listens for 'error'; without
         // a listener a later socket error would be thrown by the emitter.
@@ -96,7 +101,7 @@ async function acquire(serverId) {
   }
 
   const ssh = await entry.ready
-  scheduleIdle(serverId, entry)
+  if (pool.get(serverId) === entry) scheduleIdle(serverId, entry)
   return ssh
 }
 
