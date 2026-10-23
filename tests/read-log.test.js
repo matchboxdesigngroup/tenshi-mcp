@@ -8,6 +8,7 @@ import {
 } from './helpers/fake-sftp-server.js'
 import {
   readLogHandler,
+  selectLines,
   WINDOW_BYTES,
   MAX_OUTPUT_BYTES,
   MAX_LINE_CHARS,
@@ -203,6 +204,13 @@ describe('read_log output shape and caps', () => {
     expect(result.content).not.toContain('PARTIAL')
     expect(result.content).not.toContain('\ufffd')
     expect(result.truncated.window).toBe(true)
+  })
+
+  it('does not split a surrogate pair when cutting a long line', () => {
+    const line = 'a'.repeat(MAX_LINE_CHARS - 1) + '\u{1F600}' + 'b'.repeat(10)
+    const { lines } = selectLines(line + '\n', { dropFirstLine: false, lines: 10 })
+    expect(lines).toEqual(['a'.repeat(MAX_LINE_CHARS - 1) + LINE_TRUNCATED_MARKER])
+    expect(lines[0]).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/)
   })
 
   it('caps long lines and marks them', async () => {

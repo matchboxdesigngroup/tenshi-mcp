@@ -62,7 +62,10 @@ export function selectLines(text, { dropFirstLine, lines, filter }) {
   const capped = picked.map(line => {
     if (line.length <= MAX_LINE_CHARS) return line
     longLines++
-    return line.slice(0, MAX_LINE_CHARS) + LINE_TRUNCATED_MARKER
+    // Do not split a surrogate pair at the cut.
+    const lastKept = line.charCodeAt(MAX_LINE_CHARS - 1)
+    const cut = lastKept >= 0xd800 && lastKept <= 0xdbff ? MAX_LINE_CHARS - 1 : MAX_LINE_CHARS
+    return line.slice(0, cut) + LINE_TRUNCATED_MARKER
   })
 
   // Keep the newest lines that fit in the byte cap.

@@ -6,7 +6,7 @@ import {
   countNetwork,
   NO_NON_SFTP_REQUESTS
 } from './helpers/fake-sftp-server.js'
-import { readFileHandler, MAX_BYTES } from '../src/tools/read-file.js'
+import { readFileHandler, utf8BoundaryLength, MAX_BYTES } from '../src/tools/read-file.js'
 import { closeAll } from '../src/ssh/client.js'
 
 // Fixture paths are fake: they exist only in the in-process server's tree.
@@ -30,6 +30,7 @@ beforeAll(async () => {
       [`${ROOT}/index.php`]: { content: '<?php echo 1;' },
       [`${ROOT}/wp-content/big.txt`]: { content: 'b'.repeat(100 * 1024) },
       [`${ROOT}/wp-content/exact.txt`]: { content: 'e'.repeat(100) },
+      [`${ROOT}/wp-content/multibyte.txt`]: { content: 'a'.repeat(99) + '\u00e9' + '\u20ac' + '\u{1F600}' + 'tail' },
       [`${ROOT}/wp-content/plugins/example/readme.txt`]: { content: 'readme' },
       [`${ROOT}/wp-content/uploads`]: { symlink: '/home/other/uploads' },
       [`${ROOT}/wp-content/link-out.txt`]: { symlink: '/etc/fake-passwd' },
@@ -252,6 +253,28 @@ describe('read_file byte limits', () => {
     expect(exact.truncated).toBe(false)
     const shorter = await readFileHandler({ site: 'example.com', path: 'wp-content/exact.txt', maxBytes: 99 })
     expect(shorter.truncated).toBe(true)
+  })
+
+  it.each([
+    // maxBytes, expected content: 99 ASCII bytes, then 2-, 3- and 4-byte characters
+    [100, 'a'.repeat(99)],
+    [101, 'a'.repeat(99) + '\u00e9'],
+    [103, 'a'.repeat(99) + '\u00e9'],
+    [104, 'a'.repeat(99) + '\u00e9\u20ac'],
+    [107, 'a'.repeat(99) + '\u00e9\u20ac'],
+    [108, 'a'.repeat(99) + '\u00e9\u20ac\u{1F600}']
+  ])('cuts at maxBytes %i without splitting a character', async (maxBytes, expected) => {
+    const result = await readFileHandler({ site: 'example.com', path: 'wp-content/multibyte.txt', maxBytes })
+    expect(result.content).toBe(expected)
+    expect(result.bytes).toBe(Buffer.byteLength(expected))
+    expect(result.truncated).toBe(true)
+    expect(result.content).not.toContain('\ufffd')
+  })
+
+  it('leaves bytes that are not valid UTF-8 anyway untouched', () => {
+    expect(utf8BoundaryLength(Buffer.from([0x61, 0x80, 0x80]))).toBe(3)
+    expect(utf8BoundaryLength(Buffer.from([0x61, 0xc3]))).toBe(1)
+    expect(utf8BoundaryLength(Buffer.from([]))).toBe(0)
   })
 
   it.each([[0], [-1], [1.5], ['100']])('refuses maxBytes %j with E_INVALID_INPUT', async maxBytes => {
