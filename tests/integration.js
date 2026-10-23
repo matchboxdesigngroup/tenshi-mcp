@@ -1,7 +1,10 @@
 /**
- * Manual integration test — requires a real servers.json with valid SSH credentials.
+ * Manual integration test — requires a real servers.json with valid SSH credentials
+ * and SFTP enabled on the server. Not run in CI.
  * Usage: node tests/integration.js <serverId> <siteDomain>
  * Example: node tests/integration.js example-server example.com
+ *
+ * Both tools read over SFTP only; errors print as fixed codes.
  */
 
 import { loadRegistry } from '../src/config/servers.js'
@@ -22,8 +25,7 @@ async function run() {
   console.log('\n--- read_log: error (last 20 lines) ---')
   try {
     const r1 = await readLogHandler({ site, log: 'error', lines: 20 })
-    console.log('resolvedPath:', r1.resolvedPath)
-    console.log('lineCount:', r1.lineCount)
+    console.log('returnedLines:', r1.returnedLines, 'truncated:', r1.truncated)
     console.log('content preview:', r1.content.slice(0, 300))
   } catch (e) {
     console.error('read_log error:', e.message)
@@ -32,17 +34,16 @@ async function run() {
   console.log('\n--- read_log: debug (last 10 lines, filter: fatal) ---')
   try {
     const r2 = await readLogHandler({ site, log: 'debug', lines: 10, filter: 'fatal' })
-    console.log('resolvedPath:', r2.resolvedPath)
+    console.log('returnedLines:', r2.returnedLines)
     console.log('content:', r2.content || '(no matches)')
   } catch (e) {
     console.error('read_log error:', e.message)
   }
 
-  console.log('\n--- read_file: wp-config.php (first 500 bytes) ---')
+  console.log('\n--- read_file: index.php (first 500 bytes) ---')
   try {
-    const r3 = await readFileHandler({ site, path: 'wp-config.php', maxBytes: 500 })
-    console.log('resolvedPath:', r3.resolvedPath)
-    console.log('truncated:', r3.truncated)
+    const r3 = await readFileHandler({ site, path: 'index.php', maxBytes: 500 })
+    console.log('path:', r3.path, 'bytes:', r3.bytes, 'truncated:', r3.truncated)
     console.log('content preview:', r3.content.slice(0, 200))
   } catch (e) {
     console.error('read_file error:', e.message)

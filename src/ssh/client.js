@@ -4,9 +4,9 @@ import { getServerConfig } from '../config/servers.js'
 import { ERROR_CODES, ToolError } from '../errors.js'
 
 // Connection pool keyed by server id. The NodeSSH object never leaves this
-// module except through getConnection, which only the legacy executor uses.
-// Tools reach the server through src/ssh/sftp.js, which receives a bare SFTP
-// channel from openSftpChannel below.
+// module: the only export that touches it is openSftpChannel, which hands a
+// bare SFTP channel to src/ssh/sftp.js. Nothing here opens an exec or shell
+// channel.
 
 /**
  * @typedef {{ ready: Promise<NodeSSH>, ssh: NodeSSH | null, timer: ReturnType<typeof setTimeout> | null }} PoolEntry
@@ -98,15 +98,6 @@ async function acquire(serverId) {
   const ssh = await entry.ready
   scheduleIdle(serverId, entry)
   return ssh
-}
-
-/**
- * Legacy accessor used only by src/ssh/executor.js until that module is
- * removed. Do not use in new code.
- * @deprecated
- */
-export async function getConnection(serverId) {
-  return acquire(serverId)
 }
 
 /**
