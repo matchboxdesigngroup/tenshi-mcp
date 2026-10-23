@@ -125,6 +125,8 @@ describe('resolveServersPath (TENSHI_MCP_SERVERS_PATH with deprecated SSH_MCP_SE
     expect(result).toBe(path.resolve(NEW))
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain('ignored')
+    expect(warnings[0]).toContain('SSH_MCP_SERVERS_PATH')
+    expect(warnings[0]).toContain('M5')
   })
 
   it('treats an empty new name as unset and falls back to the old name', async () => {
@@ -141,6 +143,12 @@ describe('resolveServersPath (TENSHI_MCP_SERVERS_PATH with deprecated SSH_MCP_SE
 
   it('treats a whitespace-only old name as unset: default path, no warning', async () => {
     const { result, warnings } = await resolveWith({ SSH_MCP_SERVERS_PATH: '   ' })
+    expect(result).toBe(path.resolve('./servers.json'))
+    expect(warnings).toEqual([])
+  })
+
+  it('uses the default path, without a warning, when both names are whitespace only', async () => {
+    const { result, warnings } = await resolveWith({ TENSHI_MCP_SERVERS_PATH: '  ', SSH_MCP_SERVERS_PATH: '\t' })
     expect(result).toBe(path.resolve('./servers.json'))
     expect(warnings).toEqual([])
   })
