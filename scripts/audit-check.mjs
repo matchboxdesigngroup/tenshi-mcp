@@ -4,7 +4,8 @@
 //
 // Runs `npm audit --json` on the locked dependency tree (package-lock.json)
 // against the public registry with the prod, dev, optional and peer trees
-// included and offline mode off, whatever .npmrc or the environment say.
+// included, offline mode off and TLS certificate checks on, whatever .npmrc or
+// the environment say.
 // Fails when:
 //   - a high or critical advisory is reported that is not in .audit-allowlist.json,
 //   - an advisory is reported with an unknown or missing severity (these can never
@@ -22,8 +23,8 @@
 //
 // Known limits: entries match on advisory id and package, so a new install path
 // to an already-allowlisted package and advisory is not reported separately.
-// Proxy and TLS settings (proxy, https-proxy, noproxy, strict-ssl, ca, cafile)
-// still come from npm config; see CONTRIBUTING.md.
+// Proxy and certificate-authority settings (proxy, https-proxy, noproxy, ca,
+// cafile) and Node's own TLS environment variables still apply; see CONTRIBUTING.md.
 //
 // Usage: node scripts/audit-check.mjs [--allowlist <path>]
 // Exit codes: 0 pass; 1 unlisted, unknown-severity or re-rated advisories, or
@@ -41,12 +42,15 @@ export const MAX_EXPIRY_DAYS = 60;
 // Command-line flags override project, user and global .npmrc files and
 // npm_config_* environment settings, so offline mode, a mirror registry,
 // package-lock=false (which audits a freshly resolved tree instead of the
-// lockfile), or omit=dev / production cannot hide advisories.
+// lockfile), omit=dev / production, or strict-ssl=false (which accepts any TLS
+// certificate, so an intercepting proxy could answer for the registry) cannot
+// hide advisories.
 export const AUDIT_ARGS = Object.freeze([
   'audit',
   '--json',
   '--offline=false',
   '--registry=https://registry.npmjs.org/',
+  '--strict-ssl=true',
   '--package-lock=true',
   '--include=prod',
   '--include=dev',

@@ -71,12 +71,13 @@ const entry = (pkg, id, severity = 'high', expires = '2026-11-30') => ({
 const quiet = { today: TODAY, log: () => {}, error: () => {} };
 
 describe('AUDIT_ARGS', () => {
-  it('forces online mode, the public registry, the lockfile and every dependency tree', () => {
+  it('forces online mode, the public registry, TLS certificate checks, the lockfile and every dependency tree', () => {
     expect([...AUDIT_ARGS]).toEqual([
       'audit',
       '--json',
       '--offline=false',
       '--registry=https://registry.npmjs.org/',
+      '--strict-ssl=true',
       '--package-lock=true',
       '--include=prod',
       '--include=dev',
@@ -488,6 +489,8 @@ describe('isEntryPoint', () => {
 //   - omit=dev, production=true or NODE_ENV=production hide the dev tree unless
 //     --include=dev is given,
 //   - package-lock=false audits a freshly resolved tree that has no advisories,
+//   - strict-ssl=false stands for an intercepting proxy that answers for the
+//     registry with a clean report (the worst case that setting allows),
 //   - any registry other than the public one is unreachable (npm 10 shape).
 // The locked tree has a high advisory in a prod dependency and a critical one
 // in a dev dependency. STUB_OUTPUT, if set, is printed verbatim instead.
@@ -527,6 +530,7 @@ if (registry !== 'https://registry.npmjs.org/') {
   process.exit(1);
 }
 if (pick('offline') === 'true') out({}, 2);
+if (pick('strict-ssl') === 'false') out({}, 2);
 if (pick('package-lock') === 'false') out({}, 3);
 const adv = (name, id, severity) => ({ source: 1, name, url: 'https://github.com/advisories/' + id, severity });
 const vulns = {
@@ -608,8 +612,10 @@ describe('main with a stubbed npm on PATH', () => {
     ['package-lock=false in the environment', { env: { npm_config_package_lock: 'false' } }],
     ['package-lock=false in the project .npmrc', { npmrc: 'package-lock=false\n' }],
     ['package-lock=false in the userconfig', { userrc: 'package-lock=false\n' }],
+    ['strict-ssl=false in the environment', { env: { npm_config_strict_ssl: 'false' } }],
+    ['strict-ssl=false in the project .npmrc', { npmrc: 'strict-ssl=false\n' }],
     ['a mirror registry in the project .npmrc', { npmrc: 'registry=https://registry.example.com/\n' }],
-    ['all of them in the project .npmrc', { npmrc: 'offline=true\nomit=dev\npackage-lock=false\nproduction=true\nregistry=https://registry.example.com/\n' }],
+    ['all of them in the project .npmrc', { npmrc: 'offline=true\nomit=dev\npackage-lock=false\nproduction=true\nstrict-ssl=false\nregistry=https://registry.example.com/\n' }],
   ];
   for (const [name, opts] of HIDING) {
     it(`with ${name}: still reports the locked-tree advisories`, () => {
