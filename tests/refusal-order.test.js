@@ -8,6 +8,7 @@ import {
 import { readFileHandler } from '../src/tools/read-file.js'
 import { readLogHandler } from '../src/tools/read-log.js'
 import { closeAll } from '../src/ssh/client.js'
+import { lookupSite } from '../src/tools/site.js'
 
 // Refusals that need no server (unknown or prototype site names, paths that
 // leave the root lexically) happen before any network activity: no SSH
@@ -69,6 +70,18 @@ async function refusal(promise) {
   expect(err).not.toBeNull()
   return err.message
 }
+
+describe('lookupSite', () => {
+  // The handlers also refuse a missing root lexically; this pins the site
+  // guard itself so it does not rely on that second layer.
+  it.each(PROTOTYPE_NAMES.map(n => [n]))('refuses %j as E_NOT_AVAILABLE', name => {
+    expect(() => lookupSite(name)).toThrow(NOT_AVAILABLE)
+  })
+
+  it('returns string roots for a configured site', () => {
+    expect(lookupSite('example.com')).toEqual({ serverId: 'fake-server', wordpressRoot: ROOT, logDir: '/var/log/nginx' })
+  })
+})
 
 describe('refusals before any network activity (reachable server)', () => {
   it.each(LEXICALLY_INVALID.map(p => [p]))('read_file path %j opens no connection and no SFTP session', async path => {
