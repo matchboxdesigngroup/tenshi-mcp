@@ -3,10 +3,22 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { loadRegistry } from './config/servers.js'
 import { readLogHandler, LOG_NAMES, MAX_LINES, MAX_FILTER_LENGTH } from './tools/read-log.js'
-import { readFileHandler } from './tools/read-file.js'
+import { readFileHandler, MAX_BYTES, DEFAULT_BYTES, MAX_PATH_LENGTH } from './tools/read-file.js'
 import { closeAll } from './ssh/client.js'
+import { toToolError } from './errors.js'
 
 loadRegistry()
+
+/**
+ * Tool failures reach the model as a fixed code and message only: never the
+ * caller's input, a server path or remote error text.
+ */
+function errorResult(err) {
+  return {
+    content: [{ type: 'text', text: `Error: ${toToolError(err).message}` }],
+    isError: true
+  }
+}
 
 const server = new McpServer({
   name: 'tenshi-mcp',
@@ -29,21 +41,18 @@ server.tool(
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
       }
     } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${err.message}` }],
-        isError: true
-      }
+      return errorResult(err)
     }
   }
 )
 
 server.tool(
   'read_file',
-  'Read a file within the WordPress directory of a configured site',
+  'Read the start of a regular file under the WordPress root of a configured site',
   {
     site: z.string().describe('Site domain, e.g. example.com'),
-    path: z.string().describe('Relative path within WordPress root, e.g. wp-config.php'),
-    maxBytes: z.number().int().min(1).max(51200).default(10000).describe('Max bytes to read')
+    path: z.string().max(MAX_PATH_LENGTH).describe('Path relative to the WordPress root, e.g. wp-content/plugins/example/readme.txt'),
+    maxBytes: z.number().int().min(1).max(MAX_BYTES).default(DEFAULT_BYTES).describe('Max bytes to read')
   },
   async ({ site, path, maxBytes }) => {
     try {
@@ -52,10 +61,7 @@ server.tool(
         content: [{ type: 'text', text: JSON.stringify(result, null, 2) }]
       }
     } catch (err) {
-      return {
-        content: [{ type: 'text', text: `Error: ${err.message}` }],
-        isError: true
-      }
+      return errorResult(err)
     }
   }
 )
