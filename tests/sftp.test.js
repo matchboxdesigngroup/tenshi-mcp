@@ -37,9 +37,11 @@ beforeAll(async () => {
 
 afterEach(() => {
   // Guard for every test in this file: the fake must never see an exec,
-  // shell or other non-SFTP request.
-  expect(nonSftpRequests(fake)).toEqual(NO_NON_SFTP_REQUESTS)
+  // shell or other non-SFTP request. Reset first so a failure is reported
+  // only for the test that caused it.
+  const seen = nonSftpRequests(fake)
   fake.resetEvents()
+  expect(seen).toEqual(NO_NON_SFTP_REQUESTS)
 })
 
 afterAll(async () => {

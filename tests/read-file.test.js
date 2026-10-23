@@ -52,9 +52,12 @@ beforeAll(async () => {
 })
 
 afterEach(() => {
-  expect(nonSftpRequests(fake)).toEqual(NO_NON_SFTP_REQUESTS)
-  for (const canary of CANARIES) expect(fake.events.opens).not.toContain(canary)
+  // Reset first so a failure is reported only for the test that caused it.
+  const seen = nonSftpRequests(fake)
+  const opens = [...fake.events.opens]
   fake.resetEvents()
+  expect(seen).toEqual(NO_NON_SFTP_REQUESTS)
+  for (const canary of CANARIES) expect(opens).not.toContain(canary)
 })
 
 afterAll(async () => {
