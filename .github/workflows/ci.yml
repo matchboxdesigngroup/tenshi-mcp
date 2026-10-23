@@ -29,13 +29,17 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
+      # npm audit gate: fails on any high or critical advisory not listed in
+      # .audit-allowlist.json, and on any expired or stale allowlist entry.
+      # It runs before `npm ci` so no dependency code (install scripts, tests)
+      # runs before the audit; it audits package-lock.json and needs no
+      # node_modules. Run with node directly, not `npm run`, so nothing in
+      # node_modules/.bin can shadow the npm the script spawns.
+      - name: Audit (npm audit, high and critical)
+        run: node scripts/audit-check.mjs
+
       - name: Install (lockfile)
         run: npm ci
 
       - name: Unit tests (Vitest, SSH mocked)
         run: npm test
-
-      # npm audit gate: fails on any high or critical advisory not listed in
-      # .audit-allowlist.json, and on any expired allowlist entry.
-      - name: Audit (npm audit, high and critical)
-        run: npm run audit:check
