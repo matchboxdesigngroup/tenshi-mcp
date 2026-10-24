@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { withSftpSession } from '../ssh/sftp.js'
-import { confineLexically, openConfinedFile } from '../ssh/confine.js'
+import { checkLexically, openConfinedFile } from '../ssh/confine.js'
+import { isAllowed } from '../policy/paths.js'
+import { redactText } from '../policy/redact.js'
 import { toToolError } from '../errors.js'
 import { lookupSite } from './site.js'
 
@@ -35,8 +37,10 @@ const InputSchema = z.object({
 
 /**
  * Read the start of a regular file under the site's WordPress root. The path
- * is confined lexically and then canonically (see src/ssh/confine.js); at
- * most `maxBytes` (hard cap MAX_BYTES) are returned.
+ * is confined lexically and then canonically, and must pass the site's
+ * allowlist and the built-in denylist both times (see src/ssh/confine.js and
+ * src/policy/paths.js). At most `maxBytes` (hard cap MAX_BYTES) are read, and
+ * credential lines are redacted before the content is returned.
  *
  * @param {unknown} rawInput tool arguments
  * @param {{ timeoutMs?: number }} [options] test hook; the MCP server passes none
@@ -46,12 +50,13 @@ export async function readFileHandler(rawInput, options = {}) {
     const input = InputSchema.parse(rawInput)
     const maxBytes = Math.min(input.maxBytes, MAX_BYTES)
     const site = lookupSite(input.site)
+    const allow = relativePath => isAllowed(site.allow, relativePath)
     // Every check that needs no server runs before the connection is opened,
     // so a refusal never depends on the server being reachable.
-    confineLexically(site.wordpressRoot, input.path)
+    checkLexically(site.wordpressRoot, input.path, allow)
 
     const { buf, relativePath } = await withSftpSession(site.serverId, async session => {
-      const opened = await openConfinedFile(session, site.wordpressRoot, input.path)
+      const opened = await openConfinedFile(session, site.wordpressRoot, input.path, allow)
       try {
         // One byte past the cap tells a file of exactly maxBytes from a longer one.
         const data = await opened.handle.read(0, maxBytes + 1)
@@ -66,12 +71,16 @@ export async function readFileHandler(rawInput, options = {}) {
     // Only a cut made here can split a character; a file that itself ends
     // mid-sequence is returned as it is.
     const content = truncated ? capped.subarray(0, utf8BoundaryLength(capped)) : capped
+    // Redaction runs on the cut text, so a credential line cut at the cap is
+    // redacted like a complete one; `bytes` counts what is returned.
+    const redacted = redactText(content.toString('utf8'))
     return {
       site: input.site,
       path: relativePath,
-      content: content.toString('utf8'),
-      bytes: content.length,
+      content: redacted.text,
+      bytes: Buffer.byteLength(redacted.text, 'utf8'),
       truncated,
+      redactedLines: redacted.count,
       retrievedAt: new Date().toISOString()
     }
   } catch (err) {

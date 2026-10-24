@@ -3,7 +3,8 @@ import {
   startFakeSftpServer,
   loadFakeRegistry,
   countNetwork,
-  startCountingSink
+  startCountingSink,
+  TEST_ALLOW
 } from './helpers/fake-sftp-server.js'
 import { readFileHandler } from '../src/tools/read-file.js'
 import { readLogHandler } from '../src/tools/read-log.js'
@@ -51,10 +52,14 @@ beforeAll(async () => {
     privateKeyPath: fake.clientKeyPath,
     hostKeys: [fake.hostKeyFingerprint],
     sites: {
-      'unreachable.example': { wordpressRoot: ROOT, logDir: '/var/log/nginx' },
-      // A registry key that would place the error and access logs outside
-      // logDir: refused lexically, so the server is never contacted.
-      '../traversal.example': { wordpressRoot: ROOT, logDir: '/var/log/nginx' }
+      // A site name that would place the error and access logs outside
+      // logDir is refused when the registry loads (tests/config.test.js);
+      // the tools also check log paths lexically.
+      'unreachable.example': {
+        wordpressRoot: ROOT,
+        logDir: '/var/log/nginx',
+        allow: { extensions: ['.php', '.txt'], directories: ['wp-content/plugins'] }
+      }
     }
   }])
 })
@@ -80,7 +85,7 @@ describe('lookupSite', () => {
   })
 
   it('returns string roots for a configured site', () => {
-    expect(lookupSite('example.com')).toEqual({ serverId: 'fake-server', wordpressRoot: ROOT, logDir: '/var/log/nginx' })
+    expect(lookupSite('example.com')).toEqual({ serverId: 'fake-server', wordpressRoot: ROOT, logDir: '/var/log/nginx', allow: TEST_ALLOW })
   })
 })
 
@@ -132,15 +137,19 @@ describe('refusals do not depend on the server being reachable', () => {
     expect(sink.attempts()).toBe(0)
   })
 
-  it('a registry log path that leaves logDir is refused without contacting the server', async () => {
-    for (const log of ['error', 'access']) {
-      expect(await refusal(readLogHandler({ site: '../traversal.example', log, lines: 5 }))).toBe(NOT_AVAILABLE)
+  it('sensitive and allowlist-miss paths are refused without contacting the server', async () => {
+    for (const path of [
+      'wp-config.php', 'WP-CONFIG.PHP', '.env', 'wp-content/plugins/x/.env.local', 'wp-content/plugins/x/dump.sql',
+      'wp-content/plugins/x/backup.tar.gz', 'wp-content/plugins/x/server.key', // denylist
+      'index.php', 'wp-content/themes/x/style.php', 'wp-content/plugins/x/data.csv', 'wp-content/plugins-old/x.php' // allowlist miss
+    ]) {
+      expect(await refusal(readFileHandler({ site: 'unreachable.example', path }))).toBe(NOT_AVAILABLE)
     }
     expect(sink.attempts()).toBe(0)
   })
 
   it('a valid path on the unreachable server does contact it and fails with E_REMOTE', async () => {
-    const message = await refusal(readFileHandler({ site: 'unreachable.example', path: 'index.php' }))
+    const message = await refusal(readFileHandler({ site: 'unreachable.example', path: 'wp-content/plugins/x/readme.txt' }))
     expect(message).toBe('E_REMOTE: The remote server could not complete the request.')
     expect(sink.attempts()).toBeGreaterThan(0)
   })
