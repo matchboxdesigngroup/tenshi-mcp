@@ -85,18 +85,19 @@ async function failure(input, options) {
 
 describe('read_file reads inside the root', () => {
   it('opens the canonical path of a relative path', async () => {
-    await readFileHandler({ site: 'example.com', path: 'wp-config.php', maxBytes: 1000 })
-    expect(fake.events.opens).toEqual([`${ROOT}/wp-config.php`])
+    await readFileHandler({ site: 'example.com', path: 'index.php', maxBytes: 1000 })
+    expect(fake.events.opens).toEqual([`${ROOT}/index.php`])
   })
 
   it('returns structured output without server paths', async () => {
-    const result = await readFileHandler({ site: 'example.com', path: './wp-content/../wp-config.php', maxBytes: 1000 })
+    const result = await readFileHandler({ site: 'example.com', path: './wp-content/../index.php', maxBytes: 1000 })
     expect(result).toEqual({
       site: 'example.com',
-      path: 'wp-config.php',
-      content: CONFIG,
-      bytes: Buffer.byteLength(CONFIG),
+      path: 'index.php',
+      content: '<?php echo 1;',
+      bytes: Buffer.byteLength('<?php echo 1;'),
       truncated: false,
+      redactedLines: 0,
       retrievedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/)
     })
     expect(JSON.stringify(result)).not.toContain('/var/')
@@ -199,10 +200,12 @@ describe('read_file confinement', () => {
     }
   )
 
-  it('gives byte-identical refusals for unknown site, escape, missing file and directory', async () => {
+  it('gives byte-identical refusals for unknown site, escape, sensitive file, missing file and directory', async () => {
     const messages = new Set()
     for (const input of [
       { site: 'unknown.example', path: 'wp-config.php' },
+      { site: 'example.com', path: 'wp-config.php' },
+      { site: 'example.com', path: 'wp-content/link-sibling.txt' },
       { site: 'example.com', path: '../../etc/passwd' },
       { site: 'example.com', path: 'wp-content/link-out.txt' },
       { site: 'example.com', path: 'wp-content/missing.php' },

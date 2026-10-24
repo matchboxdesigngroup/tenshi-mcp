@@ -27,7 +27,7 @@ const server = new McpServer({
 
 server.tool(
   'read_log',
-  'Return the last lines of a WordPress log (debug/error/access) for a configured site. Only the last 256 KB of the log are read and searched.',
+  'Return the last lines of a WordPress log (debug/error/access) for a configured site. Only the last 256 KB of the log are read and searched. Lines that look like credentials are replaced by a fixed marker before filtering.',
   {
     site: z.string().describe('Site domain, e.g. example.com'),
     log: z.enum(LOG_NAMES).describe('Log type'),
@@ -48,7 +48,7 @@ server.tool(
 
 server.tool(
   'read_file',
-  'Read the start of a regular file under the WordPress root of a configured site',
+  'Read the start of a regular file under the WordPress root of a configured site. Only files whose extension and directory the site allows are served; configuration files with credentials, environment files, dumps, backups, keys and hidden files never are. Lines that look like credentials are replaced by a fixed marker.',
   {
     site: z.string().describe('Site domain, e.g. example.com'),
     path: z.string().max(MAX_PATH_LENGTH).describe('Path relative to the WordPress root, e.g. wp-content/plugins/example/readme.txt'),
