@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { copyFileSync, mkdtempSync, rmSync } from 'fs'
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -55,6 +55,23 @@ describe('MCP server over stdio', () => {
       const { tools } = await client.listTools()
       expect(tools.map(t => t.name).sort()).toEqual(['read_file', 'read_log'])
       expect(getStderr()).not.toContain('SSH_MCP_SERVERS_PATH')
+    } finally {
+      await client.close()
+    }
+  }, 20000)
+
+  // tests/fixtures/tools-list.json is the tools/list result recorded with
+  // zod 3.25.76 before the move to zod 4. The SDK turns each tool's zod
+  // schema into the JSON Schema clients see, with a different converter per
+  // zod major, so a dependency update can change what clients are told
+  // without any source change. Update the fixture only for an intended
+  // change to the tool interface, and say so in the PR.
+  it('lists exactly the recorded tool definitions and input schemas', async () => {
+    const expected = JSON.parse(readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'tools-list.json'), 'utf8'))
+    const { client } = await connect({ TENSHI_MCP_SERVERS_PATH: serversPath })
+    try {
+      const { tools } = await client.listTools()
+      expect(tools).toStrictEqual(expected)
     } finally {
       await client.close()
     }

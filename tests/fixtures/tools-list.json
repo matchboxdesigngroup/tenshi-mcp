@@ -1,0 +1,79 @@
+[
+  {
+    "name": "read_log",
+    "description": "Return the last lines of a WordPress log (debug/error/access) for a configured site. Only the last 256 KB of the log are read and searched.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "site": {
+          "type": "string",
+          "description": "Site domain, e.g. example.com"
+        },
+        "log": {
+          "type": "string",
+          "enum": [
+            "debug",
+            "access",
+            "error"
+          ],
+          "description": "Log type"
+        },
+        "lines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50,
+          "description": "Number of lines to return from the end of the log"
+        },
+        "filter": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Optional case-insensitive substring; every character is matched literally"
+        }
+      },
+      "required": [
+        "site",
+        "log"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  },
+  {
+    "name": "read_file",
+    "description": "Read the start of a regular file under the WordPress root of a configured site",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "site": {
+          "type": "string",
+          "description": "Site domain, e.g. example.com"
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Path relative to the WordPress root, e.g. wp-content/plugins/example/readme.txt"
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 51200,
+          "default": 10000,
+          "description": "Max bytes to read"
+        }
+      },
+      "required": [
+        "site",
+        "path"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "execution": {
+      "taskSupport": "forbidden"
+    }
+  }
+]
