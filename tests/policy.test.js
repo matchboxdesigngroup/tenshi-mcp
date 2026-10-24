@@ -45,6 +45,9 @@ describe('isDenied: built-in denylist', () => {
       'auth.json', 'credentials.json', 'secrets.yml', 'secret.php', 'passwords.txt', 'htpasswd', 'authorized_keys',
       'known_hosts', 'shadow', 'secrets.prod.yml', 'credentials.local.json'
     ],
+    'names that only match once trailing dots and spaces are removed': [
+      'export.sql ', 'site.key. .', 'id_rsa ', 'archive.zip.', 'x.env . '
+    ],
     'unsafe characters and malformed paths': [
       'a\u0000b.php', 'a\nb.php', 'a‮b.php', 'a​b.php', 'a b.php', '\ud800.php', '', '/abs.php',
       'a//b.php', './a.php', 'a/../b.php', 'a/', undefined, null, 42
