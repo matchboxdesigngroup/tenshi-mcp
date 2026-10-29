@@ -300,7 +300,9 @@ Tests use `vitest`. No real server is needed: the SFTP tests start an in-process
 | `tests/refusal-order.test.js` | Refusals that need no server open no connection or SFTP session and do not depend on the server being reachable |
 | `tests/errors.test.js` | Fixed error codes and messages |
 | `tests/boundaries.test.js` | Module boundaries: only `src/ssh/client.js` uses the SSH library, tools use the facade |
-| `tests/server.test.js` | Protocol: server name, tool list, fixed refusal over stdio, env fallback |
+| `tests/server.test.js` | Protocol over stdio with the SDK client: server name, tool list, the `tools/list` result against `tests/fixtures/tools-list.json`, which arguments the SDK refuses before a handler runs (unknown keys are not refused), fixed refusal over stdio, env fallback |
+| `tests/schema.test.js` | Tool input schemas strip unknown keys; string bounds count UTF-16 units and keep zod's issue shape and the listed `minLength`/`maxLength` |
+| `tests/string-bounds.test.js` | String bounds in UTF-16 units at the cap with astral characters, surrogate pairs across the cap and lone surrogates, in the handlers, over stdio and in the registry (expected outcomes are the zod 3 outcomes) |
 | `tests/audit-check.test.js` | Audit allowlist check |
 
 ### Manual integration test
