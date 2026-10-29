@@ -70,6 +70,7 @@ tests/
   policy.test.js        Unit: denylist, allowlist, redaction
   confinement-policy.test.js  Unit: confinement and policy fixtures against the fake
   site.test.js          Unit: site lookup shape check
+  redaction-cut.test.js Unit: redaction independent of the cut and the window
   read-log.test.js      Unit: read_log against the fake
   read-file.test.js     Unit: read_file against the fake
   refusal-order.test.js Unit: refusals before any network activity
@@ -97,11 +98,11 @@ Details in the README security model; the design follows the platform ADR on too
 3. **No remote commands** — tools use only the read-only SFTP facade in `src/ssh/sftp.js` (realpath, lstat, open for reading, fstat, bounded read, close). Never add an exec, shell or write path, and never import `src/ssh/client.js`, `node-ssh` or `ssh2` from a tool.
 4. **Path confinement** — `read_file` paths and log paths are checked lexically in the tool before any connection is opened (keep it that way: refusals must not depend on the server; encodings, backslashes, control, format and look-alike characters are refused), then resolved with SFTP realpath (non-canonical replies and a root resolving to `/` refused) and compared to the canonical root by path segment; the target must be a regular file (lstat before open; after open, fstat must match the lstat's type, mode and owner and a second realpath must return the same path). `read_log` serves only the exact configured log path.
 5. **Sensitive-file policy** — `src/policy/paths.js`, enforced inside `checkLexically` and `openConfinedFile` on the normalised and the canonical path: the site's mandatory allowlist (extensions and directories) and the built-in denylist (hidden files, wp-config variants, dumps, backups, archives, keys, credential files; case, Unicode and extension variants). Every new path-reading tool must go through `openConfinedFile` with an allow rule; never relax the denylist from the registry.
-6. **Redaction** — `src/policy/redact.js` replaces credential lines in all returned content, before any filter, selection or cut; tools return only `redactedLines`.
+6. **Redaction** — `src/policy/redact.js` replaces credential lines in all returned content. Lines are classified on their whole text before any filter, selection or cut (`read_file` reads a look-ahead past `maxBytes`; `read_log` classifies the partial first line of the window before dropping it), so the caller's cut never changes what is redacted; a redacted line is never returned in part. Keep every rule linear in the line length. Tools return only `redactedLines`.
 7. **Limits** — `read_log`: 500 lines, 51200 bytes, last 256 KB of the log, lines cut at 2000 characters, filter is a literal case-insensitive substring. `read_file`: 51200 bytes. 10-second deadline per call; on expiry the SFTP channel is closed.
 8. **Errors** — fixed codes from `src/errors.js` (`E_HOST_KEY` included); never echo arguments, server paths or remote error text.
 
-Not covered yet (tracked privately): a swap reverted between the open and the second realpath that keeps type, mode and owner (SFTP v3 cannot bind a handle to a path), hard links (undetectable over SFTP v3), audit log. Server-side confinement is the backstop.
+Not covered yet (tracked privately): a swap that keeps type, mode and owner and is undone before the second realpath (SFTP v3 cannot bind a handle to a path), hard links (undetectable over SFTP v3), refusal kinds that differ in SFTP round trips (byte-identical output, different timing), audit log. Server-side confinement is the backstop.
 
 ## MCP registration
 
