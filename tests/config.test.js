@@ -38,12 +38,20 @@ const VALID_CONFIG = {
       sites: {
         'example.com': {
           wordpressRoot: '/var/www/example.com/public',
-          logDir: '/var/log/nginx'
+          logDir: '/var/log/nginx',
+          allow: { extensions: ['.php', '.txt'], directories: ['wp-content/plugins'] }
         }
       }
     }
   ]
 }
+
+/** VALID_CONFIG with its one site replaced by `sites`. */
+function withSites(sites) {
+  return { servers: [{ ...VALID_CONFIG.servers[0], sites }] }
+}
+
+const SITE = VALID_CONFIG.servers[0].sites['example.com']
 
 describe('getServerConfig', () => {
   it('returns server config for known id', async () => {
@@ -300,5 +308,123 @@ describe('resolveServersPath (TENSHI_MCP_SERVERS_PATH with deprecated SSH_MCP_SE
     } finally {
       warn.mockRestore()
     }
+  })
+})
+
+/**
+ * VALID_CONFIG with one site under `name`, built from JSON text so that a
+ * name such as "__proto__" is an own key, exactly as JSON.parse reads it
+ * from a registry file.
+ */
+function registryWithSiteName(name) {
+  const text = JSON.stringify({ servers: [{ ...VALID_CONFIG.servers[0], sites: '__SITES__' }] })
+    .replace('"__SITES__"', `{${JSON.stringify(name)}:${JSON.stringify(SITE)}}`)
+  return JSON.parse(text)
+}
+
+describe('loadRegistry site names and own-property lookup', () => {
+  // JSON.parse keeps "__proto__" as an own key; Zod's record would drop it
+  // silently and keep "constructor" as an own key, so names are checked.
+  it.each([['__proto__'], ['constructor'], ['toString'], ['hasOwnProperty'], ['valueOf'],
+    ['../traversal.example'], ['a/b.example'], ['a\\b.example'], ['.example'], ['example.'],
+    ['ex..ample'], [''], ['sp ace.example'], ['example.com\u0000'], ['-example.com']])(
+    'refuses the site name %j without echoing it', async name => {
+      const err = await loadError(registryWithSiteName(name))
+      expect(err.message).toContain('server "testserver"')
+      expect(err.message).toContain('site names must be host names')
+      if (name.length > 2) expect(err.message).not.toContain(name)
+    }
+  )
+
+  it('fixture sanity: "__proto__" stays an own key through the file written by the test', () => {
+    const config = registryWithSiteName('__proto__')
+    expect(Object.keys(config.servers[0].sites)).toEqual(['__proto__'])
+    expect(JSON.stringify(config)).toContain('"__proto__":')
+  })
+
+  it('accepts host-name site names', async () => {
+    const sites = { 'example.com': SITE, 'shop.example.co.uk': SITE, 'xn--bcher-kva.example': SITE, 'staging_1.example.com': SITE }
+    await withServersFile(withSites(sites), async ({ loadRegistry, getSiteConfig }) => {
+      loadRegistry()
+      for (const name of Object.keys(sites)) expect(getSiteConfig('testserver', name).logDir).toBe('/var/log/nginx')
+    })
+  })
+
+  it('looks sites up by own property only', async () => {
+    await withServersFile(VALID_CONFIG, async ({ loadRegistry, getSiteConfig, resolveServerForSite }) => {
+      loadRegistry()
+      for (const name of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+        expect(() => getSiteConfig('testserver', name)).toThrow('Unknown site')
+        expect(() => resolveServerForSite(name)).toThrow('No server configured')
+      }
+    })
+  })
+})
+
+describe('loadRegistry roots', () => {
+  it.each([
+    ['relative', 'var/www/example.com/public'],
+    ['the file-system root', '/'],
+    ['a doubled slash', '/var/www//example.com/public'],
+    ['a dot segment', '/var/www/./example.com/public'],
+    ['a dot-dot segment', '/var/www/../example.com/public'],
+    ['a trailing dot-dot', '/var/www/example.com/..'],
+    ['two trailing slashes', '/var/www/example.com/public//'],
+    ['a NUL byte', '/var/www/example.com\u0000/public'],
+    ['a newline', '/var/www/example.com\n/public'],
+    ['a backslash', '/var/www\\example.com/public'],
+    ['an empty string', ''],
+    ['an over-long path', '/' + 'a'.repeat(1024)]
+  ])('refuses a wordpressRoot or logDir that is %s, without echoing it', async (_, value) => {
+    for (const field of ['wordpressRoot', 'logDir']) {
+      const err = await loadError(withSites({ 'example.com': { ...SITE, [field]: value } }))
+      expect(err.message).toContain(`sites.example.com.${field}`)
+      if (value.length > 1) expect(err.message).not.toContain(value)
+    }
+  })
+
+  it('accepts a root with one trailing slash', async () => {
+    const sites = { 'example.com': { ...SITE, wordpressRoot: '/sites/example.com/files/', logDir: '/sites/example.com/logs/' } }
+    await withServersFile(withSites(sites), async ({ loadRegistry, getSiteConfig }) => {
+      loadRegistry()
+      expect(getSiteConfig('testserver', 'example.com').wordpressRoot).toBe('/sites/example.com/files/')
+    })
+  })
+})
+
+describe('loadRegistry allowlist', () => {
+  it('refuses a site without allow', async () => {
+    const { allow, ...site } = SITE
+    expect(allow).toBeDefined()
+    const err = await loadError(withSites({ 'example.com': site }))
+    expect(err.message).toContain('sites.example.com.allow: is required')
+  })
+
+  it.each([
+    ['no extensions', { extensions: [], directories: ['.'] }, 'extensions'],
+    ['no directories', { extensions: ['.php'], directories: [] }, 'directories'],
+    ['an extension without its dot', { extensions: ['php'], directories: ['.'] }, 'extensions.0'],
+    ['a multi-part extension', { extensions: ['.tar.gz'], directories: ['.'] }, 'extensions.0'],
+    ['an always-denied extension', { extensions: ['.php', '.SQL'], directories: ['.'] }, 'extensions.1'],
+    ['an always-denied key extension', { extensions: ['.pem'], directories: ['.'] }, 'extensions.0'],
+    ['an absolute directory', { extensions: ['.php'], directories: ['/etc'] }, 'directories.0'],
+    ['a dot-dot directory', { extensions: ['.php'], directories: ['wp-content/../..'] }, 'directories.0'],
+    ['a trailing-slash directory', { extensions: ['.php'], directories: ['wp-content/'] }, 'directories.0'],
+    ['a hidden directory', { extensions: ['.php'], directories: ['.git'] }, 'directories.0'],
+    ['a backup directory', { extensions: ['.php'], directories: ['wp-content/ai1wm-backups'] }, 'directories.0'],
+    ['a backslash directory', { extensions: ['.php'], directories: ['wp-content\\plugins'] }, 'directories.0'],
+    ['an unknown field', { extensions: ['.php'], directories: ['.'], denylist: [] }, 'allow'],
+    ['not an object', ['.php'], 'allow']
+  ])('refuses an allowlist with %s', async (_, allow, field) => {
+    const err = await loadError(withSites({ 'example.com': { ...SITE, allow } }))
+    expect(err.message).toContain(`sites.example.com.${field === 'allow' ? 'allow' : `allow.${field}`}`)
+  })
+
+  it('stores extensions lower-cased and without duplicates', async () => {
+    const sites = { 'example.com': { ...SITE, allow: { extensions: ['.PHP', '.php', '.Txt'], directories: ['.', 'wp-content/plugins'] } } }
+    await withServersFile(withSites(sites), async ({ loadRegistry, getSiteConfig }) => {
+      loadRegistry()
+      expect(getSiteConfig('testserver', 'example.com').allow).toEqual({ extensions: ['.php', '.txt'], directories: ['.', 'wp-content/plugins'] })
+    })
   })
 })

@@ -4,6 +4,8 @@
 
 > **SFTP note:** Tasks 4 to 6 describe the original command executor (`src/ssh/executor.js`, `runCommand`) and tools that built remote command strings. That design was replaced: the executor is removed and both tools read over SFTP through a read-only facade (`src/ssh/sftp.js`, `src/ssh/confine.js`). The code samples in those tasks are historical; see the README security model and the note in `docs/adrs/ADR-002-command-security-model.md`.
 
+> **Policy note:** examples below that read `wp-config.php` describe the original plan. Since #20 that file, its variants and other sensitive files are always refused, `read_file` serves only extensions and directories in the site's `allow` list, and credential lines are redacted; see the README section "Sensitive-file policy".
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a local MCP server (stdio transport) that SSHs into configured servers and exposes two tools — `read_log` and `read_file` — for reading WordPress logs and files during Claude triage sessions.

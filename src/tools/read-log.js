@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { withSftpSession } from '../ssh/sftp.js'
-import { confineLexically, openConfinedFile } from '../ssh/confine.js'
+import { checkLexically, confineLexically, openConfinedFile } from '../ssh/confine.js'
+import { redactLines } from '../policy/redact.js'
 import { toToolError } from '../errors.js'
 import { lookupSite } from './site.js'
 
@@ -33,16 +34,19 @@ function logLocation(log, site, config) {
     case 'debug':
       return { root: config.wordpressRoot, relativePath: 'wp-content/debug.log' }
     case 'error':
-      return { root: config.logDir, relativePath: `${site}.error.log` }
+      return { root: config.logDir, relativePath: `${site}.error.log`, trustedPrefix: site }
     case 'access':
-      return { root: config.logDir, relativePath: `${site}.access.log` }
+      return { root: config.logDir, relativePath: `${site}.access.log`, trustedPrefix: site }
   }
 }
 
 /**
- * Pick the lines to return from the tail window. The filter is a
- * case-insensitive substring match on the plain string: no regular
- * expression is ever built from it, so every character is literal.
+ * Pick the lines to return from the tail window. Credential lines are
+ * redacted first, so the filter, the line selection and the caps only ever
+ * see redacted text (a filter cannot probe a secret through the line
+ * count). The filter is a case-insensitive substring match on the plain
+ * string: no regular expression is ever built from it, so every character is
+ * literal.
  *
  * @param {string} text decoded tail window
  * @param {{ dropFirstLine: boolean, lines: number, filter?: string }} options
@@ -51,12 +55,17 @@ function logLocation(log, site, config) {
 export function selectLines(text, { dropFirstLine, lines, filter }) {
   const all = text.split('\n')
   if (all.length > 0 && all[all.length - 1] === '') all.pop()
-  if (dropFirstLine) all.shift()
   const clean = all.map(line => (line.endsWith('\r') ? line.slice(0, -1) : line))
+  // The partial first line still gives context (an assignment whose value is
+  // on the next line); it is dropped only after classification.
+  const redaction = redactLines(clean)
+  const entries = redaction.lines.map((line, i) => ({ line, redacted: redaction.redacted[i] }))
+  if (dropFirstLine) entries.shift()
 
   const needle = filter ? filter.toLowerCase() : ''
-  const matched = needle ? clean.filter(line => line.toLowerCase().includes(needle)) : clean
-  const picked = matched.slice(-lines)
+  const matched = needle ? entries.filter(e => e.line.toLowerCase().includes(needle)) : entries
+  const pickedEntries = matched.slice(-lines)
+  const picked = pickedEntries.map(e => e.line)
 
   let longLines = 0
   const capped = picked.map(line => {
@@ -78,8 +87,9 @@ export function selectLines(text, { dropFirstLine, lines, filter }) {
     bytes += cost
   }
   kept.reverse()
+  const redactedLines = pickedEntries.slice(capped.length - kept.length).filter(e => e.redacted).length
 
-  return { lines: kept, longLines, droppedForBytes: capped.length - kept.length }
+  return { lines: kept, longLines, droppedForBytes: capped.length - kept.length, redactedLines }
 }
 
 /**
@@ -91,13 +101,23 @@ export async function readLogHandler(rawInput, options = {}) {
     const input = InputSchema.parse(rawInput)
     const lines = Math.min(input.lines, MAX_LINES)
     const site = lookupSite(input.site)
-    const { root, relativePath } = logLocation(input.log, input.site, site)
+    const { root, relativePath, trustedPrefix } = logLocation(input.log, input.site, site)
+    // The site name in a log file name comes from the registry (validated as
+    // a host name), so the denylist skips it: a site whose name contains a
+    // denied word keeps its logs. The rest of the name is checked as usual.
+    const denyOptions = { trustedPrefix }
+    // A log is served only at its configured location: the canonical path
+    // must be exactly the configured one (a log that is a symlink, even to
+    // another file inside the root, is refused), and the built-in denylist
+    // applies as for every path.
+    const expected = confineLexically(root, relativePath)
+    const allow = candidate => candidate === expected
     // Every check that needs no server runs before the connection is opened,
     // so a refusal never depends on the server being reachable.
-    confineLexically(root, relativePath)
+    checkLexically(root, relativePath, allow, denyOptions)
 
     const { window, start } = await withSftpSession(site.serverId, async session => {
-      const { handle, size } = await openConfinedFile(session, root, relativePath)
+      const { handle, size } = await openConfinedFile(session, root, relativePath, allow, denyOptions)
       try {
         const windowStart = Math.max(0, size - WINDOW_BYTES)
         const buf = await handle.read(windowStart, size - windowStart)
@@ -124,6 +144,7 @@ export async function readLogHandler(rawInput, options = {}) {
         longLines: selected.longLines,
         bytes: selected.droppedForBytes > 0
       },
+      redactedLines: selected.redactedLines,
       retrievedAt: new Date().toISOString()
     }
   } catch (err) {

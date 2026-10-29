@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isStrictlyWithin, isCanonicalPath, confineLexically } from '../src/ssh/confine.js'
+import { isStrictlyWithin, isCanonicalPath, confineLexically, checkLexically } from '../src/ssh/confine.js'
 import { ERROR_CODES } from '../src/errors.js'
 
 const ROOT = '/var/www/example.com/public'
@@ -79,5 +79,41 @@ describe('confineLexically', () => {
   it('refuses a relative or missing root', () => {
     expect(() => confineLexically('relative', 'x')).toThrow(expect.objectContaining({ code: ERROR_CODES.NOT_AVAILABLE }))
     expect(() => confineLexically(undefined, 'x')).toThrow(expect.objectContaining({ code: ERROR_CODES.NOT_AVAILABLE }))
+  })
+})
+
+describe('confineLexically input rules', () => {
+  it.each([
+    ['%2e%2e/x.php'], ['a%20b.php'], ['a\\b.php'], ['a\u0001b.php'], ['a\u007fb.php'], ['a\u0085b.php'],
+    ['a\u202eb.php'], ['a\ufeffb.php'], ['a\u2029b.php'], ['\udc00.php'], ['\u2025/x.php'], ['\uff0e\uff0e/x.php'],
+    ['a\uff0fb.php'], ['a\uff3cb.php'], ['\u2024x.php']
+  ])('refuses %j', input => {
+    expect(() => confineLexically(ROOT, input)).toThrow(expect.objectContaining({ code: ERROR_CODES.NOT_AVAILABLE }))
+  })
+
+  it('accepts ordinary non-ASCII names', () => {
+    expect(confineLexically(ROOT, 'wp-content/caf\u00e9.txt')).toBe('wp-content/caf\u00e9.txt')
+    expect(confineLexically(ROOT, 'wp-content/cafe\u0301.txt')).toBe('wp-content/cafe\u0301.txt')
+  })
+})
+
+describe('checkLexically', () => {
+  const always = () => true
+
+  it('applies the denylist even when the allow rule accepts everything', () => {
+    expect(() => checkLexically(ROOT, 'wp-config.php', always)).toThrow(expect.objectContaining({ code: ERROR_CODES.NOT_AVAILABLE }))
+    expect(checkLexically(ROOT, './index.php', always)).toBe('index.php')
+  })
+
+  it('applies the allow rule to the normalised path', () => {
+    const seen = []
+    expect(() => checkLexically(ROOT, 'wp-content/../index.php', p => { seen.push(p); return false }))
+      .toThrow(expect.objectContaining({ code: ERROR_CODES.NOT_AVAILABLE }))
+    expect(seen).toEqual(['index.php'])
+  })
+
+  it('fails closed without an allow rule, and accepts only a literal true', () => {
+    expect(() => checkLexically(ROOT, 'index.php')).toThrow(expect.objectContaining({ code: ERROR_CODES.INTERNAL }))
+    expect(() => checkLexically(ROOT, 'index.php', () => 1)).toThrow(expect.objectContaining({ code: ERROR_CODES.NOT_AVAILABLE }))
   })
 })
