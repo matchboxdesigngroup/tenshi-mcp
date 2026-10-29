@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { copyFileSync, mkdtempSync, rmSync } from 'fs'
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -55,6 +55,69 @@ describe('MCP server over stdio', () => {
       const { tools } = await client.listTools()
       expect(tools.map(t => t.name).sort()).toEqual(['read_file', 'read_log'])
       expect(getStderr()).not.toContain('SSH_MCP_SERVERS_PATH')
+    } finally {
+      await client.close()
+    }
+  }, 20000)
+
+  // tests/fixtures/tools-list.json is the tools/list result recorded with
+  // zod 3.25.76 before the move to zod 4. The SDK turns each tool's zod
+  // schema into the JSON Schema clients see, with a different converter per
+  // zod major, so a dependency update can change what clients are told
+  // without any source change. Update the fixture only for an intended
+  // change to the tool interface, and say so in the PR.
+  it('lists exactly the recorded tool definitions and input schemas', async () => {
+    const expected = JSON.parse(readFileSync(path.join(repoRoot, 'tests', 'fixtures', 'tools-list.json'), 'utf8'))
+    const { client } = await connect({ TENSHI_MCP_SERVERS_PATH: serversPath })
+    try {
+      const { tools } = await client.listTools()
+      expect(tools).toStrictEqual(expected)
+    } finally {
+      await client.close()
+    }
+  }, 20000)
+
+  // The SDK validates arguments against the registered schema before a
+  // handler runs. These pin which arguments it refuses and at which path,
+  // not zod's wording, which differs between zod majors.
+  it('refuses out-of-contract arguments in the SDK and strips unknown keys', async () => {
+    const refused = [
+      ['read_log', { site: 'unknown.example', log: 'not-a-log', lines: 5 }, ['log']],
+      ['read_log', { site: 'unknown.example', log: 'debug', lines: 0 }, ['lines']],
+      ['read_log', { site: 'unknown.example', log: 'debug', lines: 501 }, ['lines']],
+      ['read_log', { site: 'unknown.example', log: 'debug', lines: 1.5 }, ['lines']],
+      ['read_log', { site: 'unknown.example', log: 'debug', filter: 'x'.repeat(201) }, ['filter']],
+      ['read_log', { log: 'debug' }, ['site']],
+      ['read_file', { site: 'unknown.example', path: 'p'.repeat(1025) }, ['path']],
+      ['read_file', { site: 'unknown.example', path: 'a.php', maxBytes: 0 }, ['maxBytes']],
+      ['read_file', { site: 'unknown.example', path: 'a.php', maxBytes: 51201 }, ['maxBytes']],
+      ['read_file', { site: 'unknown.example', path: 'a.php', maxBytes: '100' }, ['maxBytes']],
+      ['read_file', { site: 42, path: 'a.php' }, ['site']]
+    ]
+    // Valid, or valid once unknown keys are stripped and defaults applied:
+    // they reach the handler, which refuses the unknown site.
+    const accepted = [
+      ['read_log', { site: 'unknown.example', log: 'debug' }],
+      ['read_log', { site: 'unknown.example', log: 'access', lines: 500, filter: 'x'.repeat(200), extra: 1 }],
+      ['read_file', { site: 'unknown.example', path: 'a.php' }],
+      ['read_file', { site: 'unknown.example', path: 'a.php', maxBytes: 51200, extra: 'ignored' }]
+    ]
+    const { client } = await connect({ TENSHI_MCP_SERVERS_PATH: serversPath })
+    try {
+      for (const [name, args, issuePath] of refused) {
+        const result = await client.callTool({ name, arguments: args })
+        expect(result.isError, JSON.stringify(args)).toBe(true)
+        const prefix = `MCP error -32602: Input validation error: Invalid arguments for tool ${name}: `
+        const text = result.content[0].text
+        expect(text.startsWith(prefix), text).toBe(true)
+        expect(JSON.parse(text.slice(prefix.length)).map(issue => issue.path)).toEqual([issuePath])
+      }
+      for (const [name, args] of accepted) {
+        const result = await client.callTool({ name, arguments: args })
+        expect(result.content, JSON.stringify(args)).toEqual([
+          { type: 'text', text: 'Error: E_NOT_AVAILABLE: The requested resource is not available.' }
+        ])
+      }
     } finally {
       await client.close()
     }

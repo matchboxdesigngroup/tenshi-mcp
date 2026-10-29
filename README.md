@@ -300,6 +300,7 @@ Tests use `vitest`. No real server is needed: the SFTP tests start an in-process
 | `tests/refusal-order.test.js` | Refusals that need no server open no connection or SFTP session and do not depend on the server being reachable |
 | `tests/errors.test.js` | Fixed error codes and messages |
 | `tests/boundaries.test.js` | Module boundaries: only `src/ssh/client.js` uses the SSH library, tools use the facade |
+| `tests/server.test.js` | The server over stdio with the SDK client: server name, the `tools/list` result against `tests/fixtures/tools-list.json`, which arguments the SDK refuses before a handler runs, the deprecated-variable warning |
 | `tests/server.test.js` | Protocol: server name, tool list, fixed refusal over stdio, env fallback |
 | `tests/audit-check.test.js` | Audit allowlist check |
 
