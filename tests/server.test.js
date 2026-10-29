@@ -79,7 +79,9 @@ describe('MCP server over stdio', () => {
 
   // The SDK validates arguments against the registered schema before a
   // handler runs. These pin which arguments it refuses and at which path,
-  // not zod's wording, which differs between zod majors.
+  // not zod's wording, which differs between zod majors. SDK 1.30.1 lists
+  // one issue per line as "<zod message> at <dot path>" (1.29.0 printed the
+  // zod issues as a JSON array).
   it('refuses out-of-contract arguments in the SDK and strips unknown keys', async () => {
     const refused = [
       ['read_log', { site: 'unknown.example', log: 'not-a-log', lines: 5 }, ['log']],
@@ -110,7 +112,9 @@ describe('MCP server over stdio', () => {
         const prefix = `MCP error -32602: Input validation error: Invalid arguments for tool ${name}: `
         const text = result.content[0].text
         expect(text.startsWith(prefix), text).toBe(true)
-        expect(JSON.parse(text.slice(prefix.length)).map(issue => issue.path)).toEqual([issuePath])
+        const issues = text.slice(prefix.length).split('\n')
+        expect(issues, text).toHaveLength(1)
+        expect(issues[0].endsWith(` at ${issuePath.join('.')}`), text).toBe(true)
       }
       for (const [name, args] of accepted) {
         const result = await client.callTool({ name, arguments: args })
