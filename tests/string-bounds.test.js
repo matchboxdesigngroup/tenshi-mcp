@@ -13,8 +13,9 @@ import { VECTORS } from './helpers/host-key-vectors.js'
 // did. zod 4's own .min()/.max() count code points, which would let a string
 // of astral characters (two units each) run to twice the cap. This file uses
 // only the public surfaces (the tool handlers, the server over stdio and
-// loadRegistry), so it runs unchanged against the zod 3 code as well: the
-// expected outcomes below are the zod 3 outcomes.
+// loadRegistry). The expected outcomes (accepted or refused, and where) are
+// the zod 3 outcomes. The SDK block also pins the refusal text of SDK 1.30.1
+// with zod 4, so that block alone does not run unchanged against zod 3.
 
 const ASTRAL = '\u{1F600}' // one code point, two UTF-16 units
 const HIGH = '\uD83D' // lone high surrogate, one unit
@@ -107,11 +108,15 @@ describe('the SDK counts listed string bounds in UTF-16 units', () => {
   })
 
   const table = [
-    ...maxCases(MAX_FILTER_LENGTH).map(([label, filter, ok]) => [`read_log filter: ${label}`, 'read_log', { site: 'unknown.example', log: 'debug', filter }, ok, ['filter']]),
-    ...maxCases(MAX_PATH_LENGTH).map(([label, p, ok]) => [`read_file path: ${label}`, 'read_file', { site: 'unknown.example', path: p }, ok, ['path']])
+    ...maxCases(MAX_FILTER_LENGTH).map(([label, filter, ok]) => [`read_log filter: ${label}`, 'read_log', { site: 'unknown.example', log: 'debug', filter }, ok, 'filter', MAX_FILTER_LENGTH]),
+    ...maxCases(MAX_PATH_LENGTH).map(([label, p, ok]) => [`read_file path: ${label}`, 'read_file', { site: 'unknown.example', path: p }, ok, 'path', MAX_PATH_LENGTH])
   ]
 
-  it.each(table)('%s', async (_label, name, args, accepted, issuePath) => {
+  // SDK 1.30.1 reports each issue as one line, "<zod message> at <dot path>"
+  // (1.29.0 printed the zod issues as a JSON array). The whole line is
+  // pinned: exactly one issue, zod 4's too_big text for a string with this
+  // bound, at this field.
+  it.each(table)('%s', async (_label, name, args, accepted, field, max) => {
     const result = await client.callTool({ name, arguments: args })
     expect(result.isError).toBe(true)
     const text = result.content[0].text
@@ -121,7 +126,7 @@ describe('the SDK counts listed string bounds in UTF-16 units', () => {
     } else {
       const prefix = `MCP error -32602: Input validation error: Invalid arguments for tool ${name}: `
       expect(text.startsWith(prefix), text.slice(0, 120)).toBe(true)
-      expect(JSON.parse(text.slice(prefix.length)).map(issue => [issue.path, issue.code])).toEqual([[issuePath, 'too_big']])
+      expect(text.slice(prefix.length)).toBe(`Too big: expected string to have <=${max} characters at ${field}`)
     }
   })
 })
