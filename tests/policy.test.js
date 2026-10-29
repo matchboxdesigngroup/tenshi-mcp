@@ -45,6 +45,24 @@ describe('isDenied: built-in denylist', () => {
       'auth.json', 'credentials.json', 'secrets.yml', 'secret.php', 'passwords.txt', 'htpasswd', 'authorized_keys',
       'known_hosts', 'shadow', 'secrets.prod.yml', 'credentials.local.json'
     ],
+    'extensions anywhere in the name': [
+      'dump.sql.1.txt', 'site.sql.20261024.txt', 'db-export.sql.txt.php', 'mysite.sql.gz.part.txt', 'index.php.bak.1.txt',
+      'server.key.2026.txt', 'private.pem.txt.php'
+    ],
+    'denied names with any number of parts': [
+      'secrets.prod.local.yml', 'credentials.1.2.json', 'id_rsa.old.1.txt', 'backup.2026.10.php'
+    ],
+    'denied words in file names': [
+      'site-backup.php', 'mysitebackup.txt', 'db-dump.txt', 'site_dump_1.txt', 'x.bak-1.txt', 'my-credentials.php', 'app-secrets.php'
+    ],
+    'denied directory names': [
+      'wp-content/uploads/db-dumps/a.txt', 'wp-content/uploads/bak/a.txt', 'wp-content/uploads/old/a.txt',
+      'wp-content/sql/a.txt', 'wp-content/site-orig/a.txt', 'wp-content/databases/a.txt'
+    ],
+    'environment configuration files': [
+      'local-config.php', 'production-config.php', 'staging-config.php', 'db-config.php', 'wp.config.php',
+      'config-local.php', 'settings.local.php', 'dev_settings.php'
+    ],
     'names that only match once trailing dots and spaces are removed': [
       'export.sql ', 'site.key. .', 'id_rsa ', 'archive.zip.', 'x.env . '
     ],
@@ -68,14 +86,38 @@ describe('isDenied: built-in denylist', () => {
     ['wp-content/themes/example/style.css'],
     ['wp-includes/js/jquery/jquery.min.js'],
     ['example.com.error.log'],
-    ['backup.example.com.access.log'],
-    ['shop.db.example.com.error.log'],
+    ['wp-content/plugins/example-shop/templates/form-lost-password.php'],
+    ['wp-content/themes/example/old-style-notes.txt'],
+    ['wp-content/plugins/example/includes/class-config.php'],
+    ['wp-content/plugins/example/readme.1.txt'],
     ['wp-content/plugins/keyring/readme.txt'],
     ['wp-content/plugins/monkey/a.php'],
     ['wp-content/uploads/2026/10/café.txt'],
     ['wp-content/plugins/password-reset/readme.txt']
   ])('allows the ordinary path %j', p => {
     expect(isDenied(p)).toBe(false)
+  })
+})
+
+describe('isDenied: registry prefix of log file names', () => {
+  it.each([
+    ['backup.example.com', 'backup.example.com.access.log'],
+    ['shop.db.example.com', 'shop.db.example.com.error.log'],
+    ['secrets.example.net', 'secrets.example.net.access.log'],
+    ['my-dump.example.org', 'my-dump.example.org.error.log']
+  ])('skips the site name %s at the start of %s', (site, name) => {
+    expect(isDenied(name)).toBe(true)
+    expect(isDenied(name, { trustedPrefix: site })).toBe(false)
+  })
+
+  it('still applies every rule to the rest of the name and to directories', () => {
+    const site = 'backup.example.com'
+    for (const p of [`${site}.sql`, `${site}.error.log.bak`, `${site}.error.sql.log`, `${site}..env`, `old/${site}.error.log`, '.env', 'wp-config.php']) {
+      expect(isDenied(p, { trustedPrefix: site })).toBe(true)
+    }
+    // Only a prefix followed by a dot is skipped, and only in the file name.
+    expect(isDenied('backup.example.comX.error.log', { trustedPrefix: site })).toBe(true)
+    expect(isDenied(`${site}/x.txt`, { trustedPrefix: site })).toBe(true)
   })
 })
 
@@ -173,7 +215,54 @@ describe('credential redaction', () => {
     'MIIEowIBAAKCAQEAfakefakefakefakeFAKEFAKE0123456789abcdefABCDEF'
   ]
 
-  it.each(credentialLines.map(l => [l]))('redacts %j', line => {
+  // Synthetic values only; token-like values are assembled at run time.
+  const join = (...p) => p.join('')
+  const moreCredentialLines = [
+    "$creds['password'] = 'FAKEVALUE';",
+    '$config["api_key"] = "FAKEVALUE";',
+    'GET /wp-login.php?action=rp&key=FAKEVALUE&login=example HTTP/1.1',
+    'GET /wp-activate.php?key=FAKEVALUE HTTP/1.1',
+    'GET /checkout/order-received/12/?key=FAKEVALUE HTTP/1.1',
+    'GET /file?sv=1&se=2&sig=FAKEVALUE HTTP/1.1',
+    'GET /callback?code=FAKEVALUE&state=1 HTTP/1.1',
+    'connect redis://:FAKEVALUE@cache.example.com:6379',
+    join('clone https://', 'FAKEVALUE0000', '@git.example.com/x.git'),
+    '<Password>FAKEVALUE</Password>',
+    '<db:secret type="x">FAKEVALUE</db:secret>',
+    'mysqldump -uexample -pFAKEVALUE example_db',
+    'mysql --user=example --password FAKEVALUE',
+    'sshpass -p FAKEVALUE ssh example',
+    'redis-cli -h cache.example.com -a FAKEVALUE ping',
+    'curl -u example:FAKEVALUE https://example.com/',
+    'the new password is FAKEVALUE',
+    'Passcode was FAKEVALUE',
+    join('token ', 'gh', 'p_', 'FAKEVALUE0000'),
+    join('key ', 'sk', '_live_', 'FAKEVALUE0000'),
+    join('key ', 'xox', 'b-', 'FAKEVALUE-0000'),
+    join('key ', 'AI', 'za', 'FAKEVALUE0000FAKE'),
+    join('jwt ', 'eyJ', 'FAKE', '.', 'FAKEVALUE')
+  ]
+
+  it.each(moreCredentialLines.map((l, i) => [i, l]))('redacts credential line form %i', (_, line) => {
+    expect(redactLines([line])).toEqual({ lines: [REDACTED_LINE], redacted: [true], count: 1 })
+  })
+
+  it.each([
+    ['a PHP define split over two lines', ["define( 'DB_PASSWORD',", "  'FAKEVALUE' );", 'next'], [true, true, false]],
+    ['a var_dump key and its value line', ['  ["password"]=>', '  string(9) "FAKEVALUE"', '  ["user"]=>'], [true, true, false]],
+    ['a JSON key and its value line', ['  "secret":', '    "FAKEVALUE",', '  "name": "x"'], [true, true, false]],
+    ['a YAML block scalar', ['secret: |', '  FAKEVALUE1', '', '  FAKEVALUE2', 'other: x'], [true, true, true, true, false]],
+    ['a folded YAML block scalar', ['  token: >-', '    FAKEVALUE', '  other: x'], [true, true, false]]
+  ])('redacts the value of %s', (_, lines, expected) => {
+    expect(redactLines(lines).redacted).toEqual(expected)
+  })
+
+  it('redacts every line above an END armour line when the text starts inside a key block', () => {
+    const window = ['AbC0FAKEbodyLine', 'Zz9=', '-----END PRIVATE KEY-----', 'after']
+    expect(redactLines(window).redacted).toEqual([true, true, true, false])
+  })
+
+  it.each(credentialLines.map((l, i) => [i, l]))('redacts basic credential line form %i', (_, line) => {
     const { lines, count } = redactLines([line])
     expect(lines).toEqual([REDACTED_LINE])
     expect(count).toBe(1)
@@ -199,9 +288,14 @@ describe('credential redaction', () => {
     expect(redactLines(cut)).toEqual({ lines: ['x', REDACTED_LINE, REDACTED_LINE, REDACTED_LINE], redacted: [false, true, true, true], count: 3 })
   })
 
-  it('redacts a credential line that was cut short', () => {
+  it('classifies whole lines: a line cut before the end of its secret is not reliably recognised', () => {
+    // redactLines sees complete lines only. Callers never hand it a line cut
+    // at a caller-chosen offset: read_file classifies the line at the cut on
+    // its text beyond the cut (tests/redaction-cut.test.js), read_log drops
+    // a partial first line after classification.
     expect(redactLines(["define( 'DB_PASSWORD', 'fa"]).count).toBe(1)
-    expect(redactLines(['mysql://user:f']).count).toBe(0) // no value shown yet
+    expect(redactLines(['scheme://user:p']).count).toBe(0)
+    expect(redactLines(['scheme://user:p@host']).count).toBe(1)
   })
 
   it('keeps line terminators in redactText', () => {
@@ -211,9 +305,27 @@ describe('credential redaction', () => {
     expect(redactText('x\n')).toEqual({ text: 'x\n', count: 0 })
   })
 
-  it('stays fast on long hostile lines', () => {
+  it.each([
+    ['repeated keywords', 'password'],
+    ['repeated keyword and separator', 'token= '],
+    ['repeated query parameters', '&key'],
+    ['repeated scheme separators', 'a://'],
+    ['repeated user information', 'a://x:'],
+    ['repeated element openings', '<pass'],
+    ['repeated element with attributes', '<secret a'],
+    ['repeated command flags', 'mysql -'],
+    ['repeated authorization schemes', 'Bearer '],
+    ['repeated token prefixes', 'eyJa.'],
+    ['repeated closing quotes', "pass'])"],
+    ['mixed base64 classes', 'aA1'],
+    ['whitespace', ' \t'],
+    ['colons', ':'],
+    ['dashes', '-----BEGIN '],
+    ['key suffixes', '_key']
+  ])('stays linear on a 1 MB line of %s', (_, unit) => {
+    const line = unit.repeat(Math.ceil(1024 * 1024 / unit.length)) + '!'
     const started = Date.now()
-    redactLines(['pass'.repeat(60000), 'a:'.repeat(100000), '://'.repeat(80000), 'aA1'.repeat(80000) + '!', '_key'.repeat(60000)])
-    expect(Date.now() - started).toBeLessThan(2000)
+    redactLines([line, line.slice(1)])
+    expect(Date.now() - started).toBeLessThan(1500)
   })
 })

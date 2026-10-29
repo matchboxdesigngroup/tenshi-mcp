@@ -16,7 +16,7 @@
 // A future directory listing must apply both: list a directory only if it is
 // allowed, and hide every entry for which isDenied(`${dir}/${name}`) holds.
 
-/** Final extensions (and second-to-last ones, see isDeniedSegment) that are never served. */
+/** Extensions that are never served, wherever they appear in a name (dump.sql.1.txt). */
 export const DENIED_EXTENSIONS = Object.freeze(new Set([
   // database files and dumps
   'sql', 'sqlite', 'sqlite3', 'db', 'db3', 'dump', 'mdb', 'accdb', 'frm', 'ibd', 'myd', 'myi',
@@ -30,11 +30,25 @@ export const DENIED_EXTENSIONS = Object.freeze(new Set([
   'env'
 ]))
 
-/** File or directory names (the part before the first dot) that are never served. */
+/** Names (the part before the first dot) that are never served. */
 const DENIED_STEMS = new Set([
   'credentials', 'credential', 'secrets', 'secret', 'passwords', 'password', 'passwd', 'shadow', 'htpasswd',
   'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'id_ecdsa_sk', 'id_ed25519_sk', 'authorized_keys', 'known_hosts',
-  'backup', 'backups', 'dump', 'dumps', 'updraft'
+  'backup', 'backups', 'dump', 'dumps', 'updraft', 'local-config', 'db-config'
+])
+
+/** Words (split at dots, hyphens, underscores and spaces) that make any segment sensitive. */
+const DENIED_WORDS = new Set([
+  'dump', 'dumps', 'backup', 'backups', 'bak', 'bk', 'bkp', 'credentials', 'secrets', 'passwords', 'updraft'
+])
+
+/** Words that make a directory sensitive (db-dumps/, bak/, old/, sql/). */
+const DENIED_DIRECTORY_WORDS = new Set([...DENIED_WORDS, 'old', 'orig', 'sql', 'mysql', 'database', 'databases'])
+
+/** A configuration file name together with one of these words is a credentials file (local-config.php). */
+const CONFIG_WORDS = new Set(['config', 'configuration', 'conf', 'settings'])
+const ENVIRONMENT_WORDS = new Set([
+  'local', 'production', 'prod', 'staging', 'stage', 'dev', 'development', 'test', 'testing', 'live', 'db', 'database', 'secret'
 ])
 
 /** Exact file names that are never served. */
@@ -57,36 +71,46 @@ function foldSegment(segment) {
 
 /**
  * True when one path segment is sensitive. `isLast` marks the final segment
- * (the file name); the substring rule for backup directories applies only to
- * directories, so a file such as `{site}.error.log` is not refused because
- * the site's domain contains a word.
+ * (the file name). `trustedPrefix`, for the final segment only, is a prefix
+ * that comes from the registry rather than from the caller (a site's host
+ * name in its log file names): the rules then apply to the rest of the name,
+ * so a site such as backup.example.com keeps its logs.
  * @param {string} segment
  * @param {boolean} isLast
+ * @param {string} [trustedPrefix]
  */
-function isDeniedSegment(segment, isLast) {
+function isDeniedSegment(segment, isLast, trustedPrefix) {
   if (segment === '' || UNSAFE_CHARS.test(segment) || !segment.isWellFormed()) return true
-  const name = foldSegment(segment)
+  let name = foldSegment(segment)
+  // After a skipped prefix, every remaining part is an extension of the name.
+  let firstExtension = 1
+  if (isLast && typeof trustedPrefix === 'string' && trustedPrefix !== '') {
+    const prefix = foldSegment(trustedPrefix) + '.'
+    if (name.startsWith(prefix) && name.length > prefix.length) {
+      name = name.slice(prefix.length)
+      firstExtension = 0
+    }
+  }
   if (name === '') return true
   // Hidden files and directories: environment files, VCS data, SSH and
   // cloud credentials, editor swap files, server auth files.
   if (name.startsWith('.')) return true
-  // WordPress configuration and its copies (wp-config.php.bak, wp_config.php, ...).
-  if (/wp[-_ ]?config/.test(name)) return true
+  // WordPress configuration and its copies (wp-config.php.bak, wp_config.php, wp.config.php, ...).
+  if (/wp[-_. ]?config/.test(name)) return true
   // Editor backups: name~ and #name#.
   if (name.endsWith('~') || (name.startsWith('#') && name.endsWith('#'))) return true
   if (DENIED_NAMES.has(name)) return true
+  if (name.includes('backup')) return true
   const parts = name.split('.')
-  // Stems apply to names of up to three parts (secrets.yml, secrets.prod.yml,
-  // backup.txt). Log names built from a site's domain have at least four
-  // ({label}.{tld}.error.log), so a domain such as backup.example.com does not
-  // lose its logs; their extensions are still checked below.
-  if (parts.length <= 3 && DENIED_STEMS.has(parts[0])) return true
-  // The last two extensions: dump.sql, dump.sql.gz, export.sql.txt, x.env.
-  const extensions = parts.slice(1)
-  for (const ext of extensions.slice(-2)) {
+  if (DENIED_STEMS.has(parts[0])) return true
+  // Every extension in the name: dump.sql, dump.sql.gz, site.sql.1.txt, x.key.2026.txt.
+  for (const ext of parts.slice(firstExtension)) {
     if (DENIED_EXTENSIONS.has(ext)) return true
   }
-  if (!isLast && name.includes('backup')) return true
+  const words = name.split(/[-_. ]+/).filter(w => w !== '')
+  const deniedWords = isLast ? DENIED_WORDS : DENIED_DIRECTORY_WORDS
+  if (words.some(w => deniedWords.has(w))) return true
+  if (words.some(w => CONFIG_WORDS.has(w)) && words.some(w => ENVIRONMENT_WORDS.has(w))) return true
   return false
 }
 
@@ -106,11 +130,14 @@ function relativeSegments(relativePath) {
  * True when the built-in denylist refuses `relativePath` (relative to the
  * site's root). Anything that is not a well-formed relative path is refused.
  * @param {unknown} relativePath
+ * @param {{ trustedPrefix?: string }} [options] trustedPrefix: a registry
+ *   value at the start of the file name that the rules skip (read_log passes
+ *   the site name for `{site}.error.log`); never caller input
  */
-export function isDenied(relativePath) {
+export function isDenied(relativePath, options = {}) {
   const parts = relativeSegments(relativePath)
   if (parts === null) return true
-  return parts.some((segment, i) => isDeniedSegment(segment, i === parts.length - 1))
+  return parts.some((segment, i) => isDeniedSegment(segment, i === parts.length - 1, options.trustedPrefix))
 }
 
 /**

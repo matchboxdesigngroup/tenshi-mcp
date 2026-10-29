@@ -6,7 +6,7 @@ import {
   countNetwork,
   NO_NON_SFTP_REQUESTS
 } from './helpers/fake-sftp-server.js'
-import { readFileHandler, utf8BoundaryLength, MAX_BYTES } from '../src/tools/read-file.js'
+import { readFileHandler, utf8BoundaryLength, MAX_BYTES, LOOKAHEAD_BYTES } from '../src/tools/read-file.js'
 import { closeAll } from '../src/ssh/client.js'
 
 // Fixture paths are fake: they exist only in the in-process server's tree.
@@ -241,7 +241,7 @@ describe('read_file byte limits', () => {
     expect(result.bytes).toBe(MAX_BYTES)
     expect(result.content).toHaveLength(MAX_BYTES)
     expect(result.truncated).toBe(true)
-    expect(fake.events.readBytesServed).toBeLessThanOrEqual(MAX_BYTES + 1)
+    expect(fake.events.readBytesServed).toBeLessThanOrEqual(MAX_BYTES + LOOKAHEAD_BYTES + 1)
   })
 
   it('returns at most maxBytes and flags truncation', async () => {
@@ -290,7 +290,7 @@ describe('read_file byte limits', () => {
     const result = await readFileHandler({ site: 'example.com', path: 'wp-content/endless.bin', maxBytes: 999999 })
     expect(result.bytes).toBe(MAX_BYTES)
     expect(result.truncated).toBe(true)
-    expect(fake.events.readBytesServed).toBeLessThanOrEqual(MAX_BYTES + 1)
+    expect(fake.events.readBytesServed).toBeLessThanOrEqual(MAX_BYTES + LOOKAHEAD_BYTES + 1)
     await fake.waitFor(() => fake.openSftpSessions() === 0)
   })
 

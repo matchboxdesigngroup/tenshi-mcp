@@ -70,7 +70,8 @@ const KEY_LOG = '-----BEGIN RSA PRIVATE KEY-----\n' + KEY_BODY + '\n-----END RSA
 const SENSITIVE_VARIANTS = [
   'wp-config.php', 'WP-CONFIG.PHP', 'Wp-Config.php', 'wp-config-sample.php', 'wp-config.php.txt', 'wp_config.php',
   'wp-config.php.bak.txt', 'index.php.bak.txt', 'dump.sql.txt', 'export.SQL.php', 'secrets.php', 'credentials.txt',
-  'backups/site.php', 'wp-content/ai1wm-backups/a.txt', 'id_rsa.txt', 'server.key.txt', 'passwords.txt'
+  'backups/site.php', 'wp-content/ai1wm-backups/a.txt', 'id_rsa.txt', 'server.key.txt', 'passwords.txt',
+  'dump.sql.1.txt', 'site-backup.php', 'local-config.php', 'wp.config.php', 'secrets.prod.local.php', 'wp-content/uploads/db-dumps/a.txt'
 ]
 
 const SITES = {

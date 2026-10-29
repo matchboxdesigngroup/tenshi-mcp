@@ -29,8 +29,9 @@ import { isDenied } from '../policy/paths.js'
 // owner; a swap that is reverted before the second realpath and keeps those
 // attributes is not detected. Nothing is read from a handle that fails
 // layer 3. Hard links cannot be detected at all over SFTP v3 (the attributes
-// carry no link count or inode): a hard link inside the root is served as a
-// regular file under its own name, subject to the policy and to redaction.
+// carry no link count or inode): a hard link inside the root, also one put
+// in place of a checked file with the same attributes, is served as a regular
+// file under its own name, subject to the policy and to redaction.
 // Server-side confinement (a read-only account, chroot or per-site user) is
 // the backstop for both.
 
@@ -131,10 +132,11 @@ export function confineLexically(root, relativePath) {
  * then the tool's allow rule. Throws E_NOT_AVAILABLE when either refuses.
  * @param {string} relativePath
  * @param {(relativePath: string) => boolean} allow
+ * @param {{ trustedPrefix?: string }} [denyOptions] see isDenied
  */
-function enforcePolicy(relativePath, allow) {
+function enforcePolicy(relativePath, allow, denyOptions) {
   if (typeof allow !== 'function') throw new ToolError(ERROR_CODES.INTERNAL)
-  if (isDenied(relativePath)) throw notAvailable()
+  if (isDenied(relativePath, denyOptions)) throw notAvailable()
   if (allow(relativePath) !== true) throw notAvailable()
 }
 
@@ -144,10 +146,11 @@ function enforcePolicy(relativePath, allow) {
  * @param {string} root configured absolute root
  * @param {string} relativePath caller input or fixed log path
  * @param {(relativePath: string) => boolean} allow the tool's allow rule
+ * @param {{ trustedPrefix?: string }} [denyOptions] see isDenied; registry values only
  */
-export function checkLexically(root, relativePath, allow) {
+export function checkLexically(root, relativePath, allow, denyOptions) {
   const normalised = confineLexically(root, relativePath)
-  enforcePolicy(normalised, allow)
+  enforcePolicy(normalised, allow, denyOptions)
   return normalised
 }
 
@@ -167,10 +170,11 @@ function sameIdentity(a, b) {
  * @param {string} relativePath path under root
  * @param {(relativePath: string) => boolean} allow the tool's allow rule,
  *   applied to the normalised and to the canonical relative path
+ * @param {{ trustedPrefix?: string }} [denyOptions] see isDenied; registry values only
  * @returns {Promise<{ handle: import('./sftp.js').ReadOnlyHandle, size: number, relativePath: string }>}
  */
-export async function openConfinedFile(session, root, relativePath, allow) {
-  const normalised = checkLexically(root, relativePath, allow)
+export async function openConfinedFile(session, root, relativePath, allow, denyOptions) {
+  const normalised = checkLexically(root, relativePath, allow, denyOptions)
 
   // The server's answers are checked as given: a reply that is not in
   // canonical form is refused rather than normalised here.
@@ -180,7 +184,7 @@ export async function openConfinedFile(session, root, relativePath, allow) {
   if (!isCanonicalPath(canonicalTarget)) throw notAvailable()
   if (!isStrictlyWithin(canonicalRoot, canonicalTarget)) throw notAvailable()
   const canonicalRelative = posix.relative(canonicalRoot, canonicalTarget)
-  enforcePolicy(canonicalRelative, allow)
+  enforcePolicy(canonicalRelative, allow, denyOptions)
 
   // realpath resolved every link, so the target itself must not be a link
   // and must be a regular file.
