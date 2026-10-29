@@ -43,3 +43,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 - `src/ssh/executor.js` (`runCommand`) and `tests/executor.test.js`: no tool runs a remote command or builds a command string (#1).
+
+### Security
+- body-parser 2.2.2 -> 2.4.0 in `package-lock.json` (transitive, via `@modelcontextprotocol/sdk` -> `express`) for GHSA-27r3-jxmh-p828 (high). The audit gate no longer reports it. The ranges in 2.4.0 also move iconv-lite 0.7.2 -> 0.7.3, qs 6.15.2 -> 6.16.1 and side-channel 1.1.0 -> 1.1.1, and add a nested content-type 2.1.0 under body-parser (#22). The server runs over stdio and does not load express or body-parser, so it was not exposed.
