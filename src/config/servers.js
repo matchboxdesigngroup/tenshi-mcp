@@ -1,11 +1,12 @@
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { z } from 'zod'
+import { boundedString } from '../schema.js'
 import { MAX_HOST_KEYS, normaliseFingerprint } from '../ssh/host-key.js'
 
 const SiteSchema = z.object({
-  wordpressRoot: z.string().min(1),
-  logDir: z.string().min(1)
+  wordpressRoot: boundedString({ min: 1 }),
+  logDir: boundedString({ min: 1 })
 })
 
 // Issue messages are fixed text: they never contain the rejected value.
@@ -37,12 +38,12 @@ const HostKeysSchema = z.array(z.string(), {
   })
 
 const ServerSchema = z.object({
-  id: z.string().min(1),
-  label: z.string().min(1),
-  host: z.string().min(1),
+  id: boundedString({ min: 1 }),
+  label: boundedString({ min: 1 }),
+  host: boundedString({ min: 1 }),
   port: z.number().int().min(1).max(65535),
-  user: z.string().min(1),
-  privateKeyPath: z.string().min(1),
+  user: boundedString({ min: 1 }),
+  privateKeyPath: boundedString({ min: 1 }),
   hostKeys: HostKeysSchema,
   sites: z.record(z.string(), SiteSchema)
 })
