@@ -25,7 +25,22 @@ const server = new McpServer({
   version: '1.0.0'
 })
 
-server.tool(
+/**
+ * Register a tool whose arguments are the zod object `shape`. Unknown
+ * argument keys are stripped, not refused. The listed input schema keeps
+ * "additionalProperties": false: the SDK's zod 3 converter emitted it for
+ * objects that strip unknown keys, but zod 4's converter omits it for them
+ * in input mode, and server.tool() accepts only a bare shape, which cannot
+ * carry metadata. tests/fixtures/tools-list.json pins the result.
+ */
+function tool(name, description, shape, handler) {
+  return server.registerTool(name, {
+    description,
+    inputSchema: z.object(shape).meta({ additionalProperties: false })
+  }, handler)
+}
+
+tool(
   'read_log',
   'Return the last lines of a WordPress log (debug/error/access) for a configured site. Only the last 256 KB of the log are read and searched.',
   {
@@ -46,7 +61,7 @@ server.tool(
   }
 )
 
-server.tool(
+tool(
   'read_file',
   'Read the start of a regular file under the WordPress root of a configured site',
   {

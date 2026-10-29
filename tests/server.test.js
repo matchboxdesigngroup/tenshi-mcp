@@ -77,6 +77,52 @@ describe('MCP server over stdio', () => {
     }
   }, 20000)
 
+  // The SDK validates arguments against the registered schema before a
+  // handler runs. These pin which arguments it refuses and at which path,
+  // not zod's wording, which differs between zod majors.
+  it('refuses out-of-contract arguments in the SDK and strips unknown keys', async () => {
+    const refused = [
+      ['read_log', { site: 'unknown.example', log: 'not-a-log', lines: 5 }, ['log']],
+      ['read_log', { site: 'unknown.example', log: 'debug', lines: 0 }, ['lines']],
+      ['read_log', { site: 'unknown.example', log: 'debug', lines: 501 }, ['lines']],
+      ['read_log', { site: 'unknown.example', log: 'debug', lines: 1.5 }, ['lines']],
+      ['read_log', { site: 'unknown.example', log: 'debug', filter: 'x'.repeat(201) }, ['filter']],
+      ['read_log', { log: 'debug' }, ['site']],
+      ['read_file', { site: 'unknown.example', path: 'p'.repeat(1025) }, ['path']],
+      ['read_file', { site: 'unknown.example', path: 'a.php', maxBytes: 0 }, ['maxBytes']],
+      ['read_file', { site: 'unknown.example', path: 'a.php', maxBytes: 51201 }, ['maxBytes']],
+      ['read_file', { site: 'unknown.example', path: 'a.php', maxBytes: '100' }, ['maxBytes']],
+      ['read_file', { site: 42, path: 'a.php' }, ['site']]
+    ]
+    // Valid, or valid once unknown keys are stripped and defaults applied:
+    // they reach the handler, which refuses the unknown site.
+    const accepted = [
+      ['read_log', { site: 'unknown.example', log: 'debug' }],
+      ['read_log', { site: 'unknown.example', log: 'access', lines: 500, filter: 'x'.repeat(200), extra: 1 }],
+      ['read_file', { site: 'unknown.example', path: 'a.php' }],
+      ['read_file', { site: 'unknown.example', path: 'a.php', maxBytes: 51200, extra: 'ignored' }]
+    ]
+    const { client } = await connect({ TENSHI_MCP_SERVERS_PATH: serversPath })
+    try {
+      for (const [name, args, issuePath] of refused) {
+        const result = await client.callTool({ name, arguments: args })
+        expect(result.isError, JSON.stringify(args)).toBe(true)
+        const prefix = `MCP error -32602: Input validation error: Invalid arguments for tool ${name}: `
+        const text = result.content[0].text
+        expect(text.startsWith(prefix), text).toBe(true)
+        expect(JSON.parse(text.slice(prefix.length)).map(issue => issue.path)).toEqual([issuePath])
+      }
+      for (const [name, args] of accepted) {
+        const result = await client.callTool({ name, arguments: args })
+        expect(result.content, JSON.stringify(args)).toEqual([
+          { type: 'text', text: 'Error: E_NOT_AVAILABLE: The requested resource is not available.' }
+        ])
+      }
+    } finally {
+      await client.close()
+    }
+  }, 20000)
+
   it('returns the fixed refusal for an unknown site without echoing the arguments', async () => {
     // The site is not in the registry, so no SSH connection is attempted.
     const { client } = await connect({ TENSHI_MCP_SERVERS_PATH: serversPath })

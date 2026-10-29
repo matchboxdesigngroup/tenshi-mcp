@@ -9,12 +9,18 @@ const SiteSchema = z.object({
 })
 
 // Issue messages are fixed text: they never contain the rejected value.
+// zod 4 ignores the zod 3 required_error and invalid_type_error params, so
+// the error function names the two cases of the array type check (missing,
+// not an array). zod 4 also runs length checks on anything with a length,
+// such as a string that failed the array check; `when` limits them to arrays.
+const isArray = payload => Array.isArray(payload.value)
 const HostKeysSchema = z.array(z.string(), {
-  required_error: 'host-key pins are required (at least one SHA-256 fingerprint)',
-  invalid_type_error: 'must be an array of SHA-256 fingerprints'
+  error: issue => issue.input === undefined
+    ? 'host-key pins are required (at least one SHA-256 fingerprint)'
+    : 'must be an array of SHA-256 fingerprints'
 })
-  .min(1, 'at least one SHA-256 fingerprint is required')
-  .max(MAX_HOST_KEYS, `at most ${MAX_HOST_KEYS} fingerprints are allowed`)
+  .min(1, { error: 'at least one SHA-256 fingerprint is required', when: isArray })
+  .max(MAX_HOST_KEYS, { error: `at most ${MAX_HOST_KEYS} fingerprints are allowed`, when: isArray })
   .transform((keys, ctx) => {
     const normalised = keys.map(normaliseFingerprint)
     const seen = new Set()
@@ -38,7 +44,7 @@ const ServerSchema = z.object({
   user: z.string().min(1),
   privateKeyPath: z.string().min(1),
   hostKeys: HostKeysSchema,
-  sites: z.record(SiteSchema)
+  sites: z.record(z.string(), SiteSchema)
 })
 
 const RegistrySchema = z.object({
