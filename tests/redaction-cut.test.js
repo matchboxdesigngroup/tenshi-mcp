@@ -172,9 +172,13 @@ describe('read_log windows', () => {
   })
 
   it('redacts a value whose assignment line is the partial first line of the window', async () => {
-    const result = await readLogHandler({ site: 'cut.example', log: 'debug', lines: 500 })
-    expect(result.truncated.window).toBe(true)
-    expectNoSecret(result.content)
+    // The filter selects the value line if it was left unredacted; the byte
+    // cap alone would drop it from the output.
+    const probe = await readLogHandler({ site: 'cut.example', log: 'debug', lines: 500, filter: 'Zq7' })
+    expect(probe.truncated.window).toBe(true)
+    expect(probe.returnedLines).toBe(0)
+    const all = await readLogHandler({ site: 'cut.example', log: 'debug', lines: 500 })
+    expectNoSecret(all.content)
   })
 
   it('redacts every key line, including a short last one, when the window starts inside a key block', async () => {
@@ -184,6 +188,8 @@ describe('read_log windows', () => {
     const lines = result.content.split('\n')
     expect(lines.at(-1)).toBe('after')
     expect(new Set(lines.slice(0, -1))).toEqual(new Set([REDACTED_LINE]))
+    const probe = await readLogHandler({ site: 'cut.example', log: 'error', lines: 500, filter: 'Zq7' })
+    expect(probe.returnedLines).toBe(0)
   })
 })
 

@@ -50,7 +50,8 @@ describe('isDenied: built-in denylist', () => {
       'server.key.2026.txt', 'private.pem.txt.php'
     ],
     'denied names with any number of parts': [
-      'secrets.prod.local.yml', 'credentials.1.2.json', 'id_rsa.old.1.txt', 'backup.2026.10.php'
+      'secrets.prod.local.yml', 'credentials.1.2.json', 'id_rsa.old.1.txt', 'backup.2026.10.php',
+      'id_rsa.2026.10.txt', 'passwd.prod.local.txt', 'authorized_keys.1.2.txt'
     ],
     'denied words in file names': [
       'site-backup.php', 'mysitebackup.txt', 'db-dump.txt', 'site_dump_1.txt', 'x.bak-1.txt', 'my-credentials.php', 'app-secrets.php'
@@ -118,6 +119,7 @@ describe('isDenied: registry prefix of log file names', () => {
     // Only a prefix followed by a dot is skipped, and only in the file name.
     expect(isDenied('backup.example.comX.error.log', { trustedPrefix: site })).toBe(true)
     expect(isDenied(`${site}/x.txt`, { trustedPrefix: site })).toBe(true)
+    expect(isDenied(`${site}.x/y.txt`, { trustedPrefix: site })).toBe(true)
   })
 })
 
