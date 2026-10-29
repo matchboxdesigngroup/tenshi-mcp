@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { boundedString } from '../schema.js'
 import { withSftpSession } from '../ssh/sftp.js'
 import { confineLexically, openConfinedFile } from '../ssh/confine.js'
 import { toToolError } from '../errors.js'
@@ -17,10 +18,10 @@ export const LINE_TRUNCATED_MARKER = ' [line truncated]'
 export const LOG_NAMES = /** @type {const} */ (['debug', 'access', 'error'])
 
 const InputSchema = z.object({
-  site: z.string().min(1),
+  site: boundedString({ min: 1 }),
   log: z.enum(LOG_NAMES),
   lines: z.number().int().min(1).default(50),
-  filter: z.string().max(MAX_FILTER_LENGTH).optional()
+  filter: boundedString({ max: MAX_FILTER_LENGTH }).optional()
 })
 
 /**

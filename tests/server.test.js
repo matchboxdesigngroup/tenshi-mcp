@@ -81,8 +81,10 @@ describe('MCP server over stdio', () => {
   // handler runs. These pin which arguments it refuses and at which path,
   // not zod's wording, which differs between zod majors. SDK 1.30.1 lists
   // one issue per line as "<zod message> at <dot path>" (1.29.0 printed the
-  // zod issues as a JSON array).
-  it('refuses out-of-contract arguments in the SDK and strips unknown keys', async () => {
+  // zod issues as a JSON array). Over the wire an unknown key can only be
+  // seen not to be refused; tests/schema.test.js checks that toolInputSchema
+  // strips it from the parsed arguments.
+  it('refuses out-of-contract arguments in the SDK and does not refuse unknown keys', async () => {
     const refused = [
       ['read_log', { site: 'unknown.example', log: 'not-a-log', lines: 5 }, ['log']],
       ['read_log', { site: 'unknown.example', log: 'debug', lines: 0 }, ['lines']],
@@ -96,13 +98,18 @@ describe('MCP server over stdio', () => {
       ['read_file', { site: 'unknown.example', path: 'a.php', maxBytes: '100' }, ['maxBytes']],
       ['read_file', { site: 42, path: 'a.php' }, ['site']]
     ]
-    // Valid, or valid once unknown keys are stripped and defaults applied:
-    // they reach the handler, which refuses the unknown site.
+    // Valid, or valid apart from unknown keys: they reach the handler, which
+    // refuses the unknown site. With zod 3 an own "constructor" key was
+    // answered with JSON-RPC -32603 (an "expected record" issue on the
+    // arguments) before any handler ran; with zod 4 it is an unknown key
+    // like any other.
     const accepted = [
       ['read_log', { site: 'unknown.example', log: 'debug' }],
       ['read_log', { site: 'unknown.example', log: 'access', lines: 500, filter: 'x'.repeat(200), extra: 1 }],
       ['read_file', { site: 'unknown.example', path: 'a.php' }],
-      ['read_file', { site: 'unknown.example', path: 'a.php', maxBytes: 51200, extra: 'ignored' }]
+      ['read_file', { site: 'unknown.example', path: 'a.php', maxBytes: 51200, extra: 'ignored' }],
+      ['read_log', JSON.parse('{"site":"unknown.example","log":"debug","constructor":"x","toString":"y"}')],
+      ['read_file', JSON.parse('{"site":"unknown.example","path":"a.php","constructor":"x"}')]
     ]
     const { client } = await connect({ TENSHI_MCP_SERVERS_PATH: serversPath })
     try {
