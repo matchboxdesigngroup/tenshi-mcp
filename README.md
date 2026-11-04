@@ -273,7 +273,7 @@ The tools read over SFTP only. The design follows the platform ADR on tool-layer
 
 **Registry allowlist** (`src/config/servers.js`, `src/ssh/client.js`): only servers and sites defined in `servers.json` are reachable. Sites are looked up by own property (`Object.hasOwn`), and site names must be host names, so `__proto__`, `constructor` and other `Object.prototype` names are never sites. Unknown sites are refused before any network activity.
 
-**Host-key pinning** (`src/ssh/host-key.js`, `src/ssh/client.js`): every connection, including each reconnect, passes `ssh2` a host verifier for that server's `hostKeys` pins (`hostHash: 'sha256'`). The verifier compares the presented key's digest with every pin in constant time, without stopping at the first mismatch, and rejects during the key exchange. A mismatch therefore sends no authentication request and opens no SFTP channel, and the call fails with the fixed `E_HOST_KEY`. A server without valid pins cannot be loaded, and the verifier would reject every key anyway. Mismatches are not logged: no log line carries fingerprints or host details until an audit log exists. See [Host-key pins](#host-key-pins).
+**Host-key pinning** (`src/ssh/host-key.js`, `src/ssh/client.js`): every connection, including each reconnect, passes `ssh2` a host verifier for that server's `hostKeys` pins (`hostHash: 'sha256'`). The verifier compares the presented key's digest with every pin in constant time, without stopping at the first mismatch, and rejects during the key exchange. A mismatch therefore sends no authentication request and opens no SFTP channel, and the call fails with the fixed `E_HOST_KEY`. A server without valid pins cannot be loaded, and the verifier would reject every key anyway. A mismatch is recorded in the [audit log](#audit-log) as `E_HOST_KEY` with reason `host_key`, with no fingerprint, pin or host details. Nothing else logs it. See [Host-key pins](#host-key-pins).
 
 **No remote commands** (`src/ssh/sftp.js`): tools get a read-only session facade with exactly `realpath`, `lstat`, open for reading, `fstat`, bounded `read` and `close`. The facade never exposes the SSH connection, an exec or shell channel, or any SFTP write, rename or remove operation, and no tool builds a command string. `src/ssh/client.js` is the only module that uses the SSH library. The unit tests run every tool against an in-process SSH server that records requests and fail if it ever receives an exec, shell or other non-SFTP request.
 
@@ -306,7 +306,7 @@ The tools read over SFTP only. The design follows the platform ADR on tool-layer
 - Hard links cannot be detected over SFTP v3 (the attributes carry no link count or inode). A hard link inside the root to a file elsewhere, also one put in place of a checked file with the same attributes, is served under its own name if that name passes the policy, with redaction applied.
 - Refusals are byte-identical, but not identical in cost: a refusal made before any connection (unknown site, lexical or policy refusal of the request) sends no request, and a refusal on the server takes a different number of SFTP round trips depending on where it is decided (for example, a path whose resolved target is outside the root or denied, compared with a missing one). Timing can therefore tell some refusal kinds apart; it does not reveal file contents or whether a file under a denied name exists, because such requests are refused before any connection. With the server unreachable, an unknown site still gets `E_NOT_AVAILABLE` and a known site `E_REMOTE`.
 - Redaction is heuristic: a secret in a format the rules do not recognise is returned.
-- There is no audit log yet; `redactedLines` is returned so it can record redaction counts. Tracked privately; until it lands, keep to the status note at the top of this file.
+- The audit log is not recorded for a `tools/call` request that fails the SDK's own request schema, and records written to stderr are only as durable as the process reading them. See [Audit log](#audit-log).
 
 ---
 
@@ -365,13 +365,94 @@ printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion
 
 Expected: two JSON responses, the second containing a `tools` array with `read_log` and `read_file`.
 
+## Audit log
+
+`src/audit/log.js` and `src/audit/sink.js`: every `tools/call` request that reaches the server's tool dispatcher writes exactly one JSON record (one line). That includes refusals, failures, unknown tool names and arguments the MCP SDK refuses before a handler runs. `tools/list` and other requests write none. `src/server.js` wraps the SDK's `tools/call` dispatcher and refuses to build a server if that wrapper is not in place. Not recorded: a request that fails the SDK's own `tools/call` request schema, for example one without a tool `name`. The SDK answers it with a JSON-RPC error before the dispatcher runs.
+
+**Where records go.** By default, stderr. If `TENSHI_MCP_AUDIT_LOG` is set (blank or whitespace only counts as unset), records go to that file instead. Never stdout, which carries the MCP protocol. The value must be an absolute path. The file is opened for appending, without following a symlink in the last path component and without blocking on a FIFO, and created with mode `0600`. It must be a regular file owned by the server's user with no group or other permission bits. If any of that fails, the server does not start. It prints one fixed line naming the variable (never its value) and exits with status 1: an audit log that was asked for but cannot be used does not silently fall back. Symlinks in parent directories are not checked. The server does not rotate or delete the file, so retention is up to the operator.
+
+**Writes never hold up a tool call.** Records are queued (at most 1024) and written one at a time with asynchronous `fs.write`, which runs the syscall off the event loop. A write refused with `EAGAIN` is retried after 20 ms. A record is dropped and counted in three cases: the queue is full (for example, a stderr reader that stopped draining), its write fails, or building it throws. The tool call goes on either way. This fail-open choice keeps the read-only tools available when a log sink is full or broken, and makes each loss visible: `auditDropped` in later records and a gap in `seq`. Write errors are never printed. On `SIGINT` or `SIGTERM` the server waits at most 1 second for queued records before it exits.
+
+**Never in a record:** file or log content, path, filter, site or tool-name values sent by the caller (only their length and a keyed hash), unknown argument names, credentials, host names, ports, users, key paths, host-key pins or fingerprints, and remote error text. Every line is printable ASCII: characters outside `0x20`-`0x7e` are written as `\u` escapes, so a record cannot carry a line break or a terminal control sequence. A record is at most 2048 bytes. That is below the Linux pipe atomicity limit (4096), so a record written to a pipe is never interleaved with other writes. A record over the bound is replaced by its fixed fields plus `"oversize": true`. With the current fields and argument caps this does not happen.
+
+**Hashes** are HMAC-SHA-256 keyed with a random per-process secret that is never written out, truncated to 16 hex characters. A recorded hash therefore cannot be reversed by hashing guessed paths or addresses. The cost: hashes are comparable only between records with the same `instance`, that is, from one server process.
+
+### Record fields (version 1)
+
+This list is the contract for consumers (the Tenshi side consumes it through matchboxdesigngroup/tenshi#18). A change of meaning or a removed field increases `v`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `event` | string | Always `tenshi-mcp.tool_call`. Filter stderr lines on this. |
+| `v` | number | Schema version, `1`. |
+| `ts` | string | Time the call arrived, ISO 8601 UTC with milliseconds. |
+| `seq` | number | 1, 2, 3, ... per `instance`; a gap means records were lost. |
+| `instance` | string | Random 16 hex characters per server process. |
+| `jobId` | string or null | The caller's job id from the request `_meta` key `tenshi/jobId`, if it matches `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`; otherwise null. |
+| `jobIdInvalid` | boolean | True when `tenshi/jobId` was present but not recorded (wrong type or pattern). |
+| `tool` | string or null | `read_log` or `read_file`; null for an unknown tool name. |
+| `toolName` | object | Only when `tool` is null: `{ type, length, hash }` of the name sent. |
+| `site` | string or null | The site id from the registry when the `site` argument names a registered site, else null. Never a host. |
+| `server` | string or null | The registry server id for that site, else null. |
+| `request` | object | Argument shapes, see below. |
+| `outcome` | string | `ok`, `refused` (this server or the SDK refused the call), `not_available` (the SFTP server reported the path missing or not permitted) or `error` (timeout, remote or internal failure). |
+| `code` | string or null | The error code returned to the caller (`E_NOT_AVAILABLE`, `E_INVALID_INPUT`, `E_HOST_KEY`, `E_TIMEOUT`, `E_REMOTE`, `E_INTERNAL`); null when `ok`. SDK argument refusals and unknown tools are recorded as `E_INVALID_INPUT`, although the SDK's own message is what the caller sees. |
+| `reason` | string or null | Audit-only refusal or failure kind, see below; null when `ok`. |
+| `durationMs` | number | Wall time of the call in whole milliseconds. |
+| `bytesReturned` | number | UTF-8 bytes of all text content returned to the caller, error text included. |
+| `redactedLines` | number or null | Lines replaced by the redaction marker in the returned content; null unless `ok`. |
+| `truncated` | boolean or null | A cap shortened the result. For `read_file`: the file is longer than what was returned. For `read_log`: the log is longer than the 256 KB window, a line was cut, or lines were dropped for the byte cap. Null unless `ok`. |
+| `returnedLines` | number or null | `read_log` only: lines returned; null otherwise and unless `ok`. |
+| `auditDropped` | number | Records lost in this process before this one was built. |
+| `oversize` | boolean | Present (true) only on a record replaced for exceeding the size bound. |
+
+`request` has one entry per known argument that was sent, plus `otherKeys` (the number of other argument keys, never their names). Shapes: a string is `{ type: "string", length, hash }`, and `path` adds `segments` (number of `/`-separated parts) and `ext`. `ext` is the lower-cased extension of the last part when it is in a fixed list (`php`, `txt`, `log`, `json`, `sql`, `env`, `key`, ...), `other` for any other extension and `none` without one. An extension can be part of a name, so it is never recorded as typed. A number is `{ type: "number", value }`. `log` is `{ value }` when it is one of `debug`, `access`, `error`. Any other type is `{ type }` only. Arguments that are not an object are recorded as `{ arguments: "<type>" }` or `{ arguments: "absent" }`. For an unknown tool, `request` is `{ otherKeys }`.
+
+`reason` values. These are never shown to the model: every refusal that shares a code returns byte-identical output.
+
+| `reason` | `outcome` | Meaning |
+|---|---|---|
+| `invalid_input` | refused | Arguments failed the SDK schema or the handler's own validation. |
+| `unknown_tool` | refused | No tool of that name. |
+| `unknown_site` | refused | The site is not in the registry. |
+| `path_syntax` | refused | Control, format or look-alike characters, backslash, percent sign, empty or overlong path. |
+| `outside_root` | refused | Absolute path, lexical `..` escape, or a canonical path outside the root (for example a symlink out). |
+| `denied` | refused | The built-in denylist. |
+| `not_allowed` | refused | Not covered by the site's `allow` list. |
+| `bad_reply` | refused | The server's `realpath` reply was not canonical, or the root resolved to `/`. |
+| `not_regular_file` | refused | Directory, link or other non-regular file (before or after open). |
+| `file_changed` | refused | Type, permissions, owner or path changed between the checks and the open. |
+| `host_key` | refused | The server's host key matched no pin (`E_HOST_KEY`). |
+| `not_found` | not_available | SFTP status: no such file. |
+| `permission_denied` | not_available | SFTP status: permission denied. |
+| `remote_status` | not_available | Any other SFTP status on a path operation. |
+| `timeout` | error | The 10-second deadline expired. |
+| `remote` | error | The connection or SFTP session failed. |
+| `internal` | error | Unexpected failure in this server. |
+| `unspecified` | refused | `E_NOT_AVAILABLE` without a recorded kind (not expected; kept so a record is never lost). |
+
+Example (one line in the log, wrapped here):
+
+```json
+{"event":"tenshi-mcp.tool_call","v":1,"ts":"2026-01-01T12:00:00.000Z","seq":7,"instance":"3f9c0a1b2c3d4e5f",
+ "jobId":"hs-0123abcd","jobIdInvalid":false,"tool":"read_file","site":"example.com","server":"example-server",
+ "request":{"site":{"type":"string","length":11,"hash":"9a1b2c3d4e5f6a7b"},"path":{"type":"string","length":30,"hash":"0f1e2d3c4b5a6978","segments":3,"ext":"php"},"otherKeys":0},
+ "outcome":"refused","code":"E_NOT_AVAILABLE","reason":"denied","durationMs":0,"bytesReturned":64,
+ "redactedLines":null,"truncated":null,"returnedLines":null,"auditDropped":0}
+```
+
+**Job id.** MCP lets a client put metadata in a request's `params._meta`. A caller passes its job id as `_meta: { "tenshi/jobId": "<id>" }` in `tools/call`. The id is recorded only; it changes nothing else.
+
 ---
 
 ## Project structure
 
 ```
 src/
-  index.js              MCP entry point — registers tools, starts stdio transport
+  index.js              MCP entry point: loads the registry, opens the audit sink, starts stdio transport
+  server.js             MCP server: registers tools, wraps tools/call with the audit log
+  audit/log.js          Audit records: one per tools/call, shapes and keyed hashes, never content
+  audit/sink.js         Audit sink: stderr or TENSHI_MCP_AUDIT_LOG file, bounded non-blocking queue
   config/servers.js     Load + validate servers.json (Zod), lookup functions
   errors.js             Fixed error codes returned to the model
   ssh/client.js         Connection pool keyed by server ID, 5-min idle timeout, SFTP channels only
@@ -402,7 +483,9 @@ tests/
   refusal-order.test.js Unit: refusals before any network activity
   errors.test.js        Unit: error codes
   boundaries.test.js    Unit: module boundaries of the SFTP layer
-  server.test.js        Protocol: server name, tool list, refusal over stdio, env fallback
+  server.test.js        Protocol: server name, tool list, refusal over stdio, env fallback, audit sink over stdio
+  audit.test.js         Unit: record serialization and bounds, hashes, sink failures, audit file checks
+  audit-calls.test.js   Unit: one audit record per call and outcome against the fake, no content or secrets
   audit-check.test.js   Unit: audit allowlist check
   integration.js        Manual: end-to-end SFTP against a real server
 ```
