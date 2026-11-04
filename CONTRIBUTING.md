@@ -50,7 +50,7 @@ Risk rule: builders and reviewers of anything that decides who can read or do wh
 
 ## Testing
 
-Use the Node major in [`.nvmrc`](.nvmrc) (Node 23, matching the platform's local development guide), for example `nvm use`.
+Use the Node major in [`.nvmrc`](.nvmrc) (Node 24, the LTS line; matching the platform's local development guide), for example `nvm use`.
 
 ```bash
 node scripts/audit-check.mjs   # audit gate (also `npm run audit:check`); needs only package-lock.json
