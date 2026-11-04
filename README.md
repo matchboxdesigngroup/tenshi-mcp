@@ -180,6 +180,8 @@ Use read_log to fetch the last 10 lines of the error log for example.com
 
 ## Tools
 
+The server has exactly two tools, `read_log` and `read_file`; both read over SFTP. There is no `wp_cli` tool and no other tool that runs a command: wp-cli is not part of V1 (platform ADR on tool-layer remote access), because its arguments and global options cannot be proven read-only. Adding any command tool needs a new ADR first.
+
 ### `read_log`
 
 Returns the last lines of a WordPress log file for a configured site.
