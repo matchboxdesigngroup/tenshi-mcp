@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'fs'
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, statSync } from 'fs'
+import { spawn } from 'child_process'
 import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -166,5 +167,70 @@ describe('MCP server over stdio', () => {
     } finally {
       await client.close()
     }
+  }, 20000)
+
+  // Raw stdio, without the SDK client, so every byte on stdout is seen.
+  // Sends initialize and one tools/call for an unknown site (no network),
+  // then SIGTERM once the answer arrived; the server flushes the audit queue
+  // before it exits.
+  function runRaw(env) {
+    return new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [entry], {
+        cwd: tmpDir,
+        env: { ...getDefaultEnvironment(), ...env },
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+      let stdout = ''
+      let stderr = ''
+      const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('server did not answer')) }, 15000)
+      child.stdout.on('data', chunk => {
+        stdout += chunk.toString()
+        if (stdout.split('\n').some(l => l.includes('"id":2'))) child.kill('SIGTERM')
+      })
+      child.stderr.on('data', chunk => { stderr += chunk.toString() })
+      child.on('error', reject)
+      child.on('exit', code => { clearTimeout(timer); resolve({ code, stdout, stderr }) })
+      const send = msg => child.stdin.write(JSON.stringify(msg) + '\n')
+      send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'raw', version: '0' } } })
+      send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+      send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'read_file', arguments: { site: 'unknown-marker.example', path: 'path-marker.php' }, _meta: { 'tenshi/jobId': 'hs-feed' } } })
+    })
+  }
+
+  const auditLines = text => text.split('\n').filter(l => l.startsWith('{"event":"tenshi-mcp.tool_call"'))
+
+  it('writes one audit record per call to stderr and only JSON-RPC to stdout', async () => {
+    const { stdout, stderr } = await runRaw({ TENSHI_MCP_SERVERS_PATH: serversPath })
+    const out = stdout.split('\n').filter(l => l !== '')
+    expect(out.length).toBe(2)
+    for (const line of out) {
+      const msg = JSON.parse(line)
+      expect(msg.jsonrpc).toBe('2.0')
+      expect(msg.event).toBeUndefined()
+    }
+    const records = auditLines(stderr)
+    expect(records).toHaveLength(1)
+    expect(JSON.parse(records[0])).toMatchObject({ tool: 'read_file', jobId: 'hs-feed', outcome: 'refused', code: 'E_NOT_AVAILABLE', reason: 'unknown_site', site: null, seq: 1 })
+    expect(stderr).not.toContain('marker')
+  }, 20000)
+
+  it('writes audit records to TENSHI_MCP_AUDIT_LOG instead of stderr, as a 0600 file', async () => {
+    const file = path.join(tmpDir, 'audit.jsonl')
+    const { stdout, stderr } = await runRaw({ TENSHI_MCP_SERVERS_PATH: serversPath, TENSHI_MCP_AUDIT_LOG: file })
+    expect(stdout).not.toContain('tenshi-mcp.tool_call')
+    expect(auditLines(stderr)).toEqual([])
+    const records = auditLines(readFileSync(file, 'utf8'))
+    expect(records).toHaveLength(1)
+    expect(JSON.parse(records[0])).toMatchObject({ tool: 'read_file', reason: 'unknown_site' })
+    expect(statSync(file).mode & 0o777).toBe(0o600)
+  }, 20000)
+
+  it('refuses to start when TENSHI_MCP_AUDIT_LOG cannot be used, without printing its value', async () => {
+    const bad = path.join(tmpDir, 'no-such-dir', 'audit-marker.jsonl')
+    const { code, stdout, stderr } = await runRaw({ TENSHI_MCP_SERVERS_PATH: serversPath, TENSHI_MCP_AUDIT_LOG: bad })
+    expect(code).toBe(1)
+    expect(stdout).toBe('')
+    expect(stderr).toContain('TENSHI_MCP_AUDIT_LOG must be an absolute path')
+    expect(stderr).not.toContain('audit-marker')
   }, 20000)
 })
