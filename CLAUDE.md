@@ -27,7 +27,7 @@ Unit tests use `vitest`; no real server needed. SFTP tests run against an in-pro
 
 ## CI checks
 
-`.github/workflows/ci.yml` runs on every PR and on pushes to `main`, using the Node version in `.nvmrc` (23): `node scripts/audit-check.mjs` first (locally also `npm run audit:check`; it audits `package-lock.json` before anything is installed), then `npm ci` and `npm test`. The audit check fails on any high or critical `npm audit` advisory not listed, with severity, reason, tracking issue and an expiry date at most 60 days ahead, in `.audit-allowlist.json` (expired, malformed, duplicate and stale entries, advisories whose reported severity differs from their entry in either direction, and advisories with an unknown severity fail too; npm offline, omit-dev, `package-lock=false` and `strict-ssl=false` settings are overridden so the lockfile tree is audited). Secret scanning is not in CI yet (waits for the scanning ADR). Run the same three commands locally before opening a PR. `tests/integration.js` is manual and is not run in CI. Details: [CONTRIBUTING.md](CONTRIBUTING.md#ci-checks).
+`.github/workflows/ci.yml` runs on every PR and on pushes to `main`, using the Node version in `.nvmrc` (23): `node scripts/audit-check.mjs` first (locally also `npm run audit:check`; it audits `package-lock.json` before anything is installed), then `npm ci`, the never-exec guard `node scripts/no-exec-guard.mjs` and `npm test`. The audit check fails on any high or critical `npm audit` advisory not listed, with severity, reason, tracking issue and an expiry date at most 60 days ahead, in `.audit-allowlist.json` (expired, malformed, duplicate and stale entries, advisories whose reported severity differs from their entry in either direction, and advisories with an unknown severity fail too; npm offline, omit-dev, `package-lock=false` and `strict-ssl=false` settings are overridden so the lockfile tree is audited). Secret scanning is not in CI yet (waits for the scanning ADR). Run the same four commands locally before opening a PR. `tests/integration.js` is manual and is not run in CI. Details: [CONTRIBUTING.md](CONTRIBUTING.md#ci-checks).
 
 ## Manual integration test
 
@@ -60,6 +60,7 @@ src/
 
 scripts/
   audit-check.mjs       npm audit gate with allowlist (.audit-allowlist.json)
+  no-exec-guard.mjs     Never-exec guard: AST check of src/ (CI and npm test)
 
 tests/
   helpers/fake-sftp-server.js  In-process SSH/SFTP server fake (ssh2 server mode)
@@ -79,6 +80,8 @@ tests/
   refusal-order.test.js Unit: refusals before any network activity
   errors.test.js        Unit: error codes
   boundaries.test.js    Unit: module boundaries of the SFTP layer
+  no-exec-guard.test.js Unit: static never-exec guard
+  no-exec-runtime.test.js  Unit: no process or remote command at runtime
   server.test.js        Protocol: server name, tool list, refusal over stdio, env fallback
   audit-check.test.js   Unit: audit allowlist check
   audit.test.js         Unit: audit record serialization, bounds, hashes, sink failures, audit file checks
@@ -100,7 +103,7 @@ Details in the README security model; the design follows the platform ADR on too
 
 1. **Registry allowlist** — only servers and sites in `servers.json` are reachable; sites are looked up with `Object.hasOwn` only; unknown sites are refused before any network activity.
 2. **Host-key pinning** — `connect` in `src/ssh/client.js` always passes `hostHash: 'sha256'` and the verifier from `hostVerifierFor(server)` (`src/ssh/host-key.js`), on every new connection including reconnects. The verifier compares against every pin in constant time, with no early exit, and rejects during key exchange, before authentication. A mismatch is the fixed `E_HOST_KEY`, with no fingerprint, host or path; only the audit log records it (code and reason, nothing else). Never connect without the verifier, and never cache a verification result across connections.
-3. **No remote commands** — tools use only the read-only SFTP facade in `src/ssh/sftp.js` (realpath, lstat, open for reading, fstat, bounded read, close). Never add an exec, shell or write path, and never import `src/ssh/client.js`, `node-ssh` or `ssh2` from a tool.
+3. **No remote commands** — tools use only the read-only SFTP facade in `src/ssh/sftp.js` (realpath, lstat, open for reading, fstat, bounded read, close). Never add an exec, shell or write path, and never import `src/ssh/client.js`, `node-ssh` or `ssh2` from a tool. `scripts/no-exec-guard.mjs` (CI and `npm test`) fails on any process, remote-command, dynamic-loading or code-generation API under `src/`, and on any import not in its `ALLOWED_IMPORTS`; `tests/no-exec-runtime.test.js` checks the same at runtime. Never add an exemption or widen `ALLOWED_IMPORTS` or `PROCESS_MEMBERS` without a reviewed reason.
 4. **Path confinement** — `read_file` paths and log paths are checked lexically in the tool before any connection is opened (keep it that way: refusals must not depend on the server; encodings, backslashes, control, format and look-alike characters are refused), then resolved with SFTP realpath (non-canonical replies and a root resolving to `/` refused) and compared to the canonical root by path segment; the target must be a regular file (lstat before open; after open, fstat must match the lstat's type, mode and owner and a second realpath must return the same path). `read_log` serves only the exact configured log path.
 5. **Sensitive-file policy** — `src/policy/paths.js`, enforced inside `checkLexically` and `openConfinedFile` on the normalised and the canonical path: the site's mandatory allowlist (extensions and directories) and the built-in denylist (hidden files, wp-config variants, dumps, backups, archives, keys, credential files; case, Unicode and extension variants). Every new path-reading tool must go through `openConfinedFile` with an allow rule; never relax the denylist from the registry.
 6. **Redaction** — `src/policy/redact.js` replaces credential lines in all returned content. Lines are classified on their whole text before any filter, selection or cut (`read_file` reads a look-ahead past `maxBytes`; `read_log` classifies the partial first line of the window before dropping it), so the caller's cut never changes what is redacted; a redacted line is never returned in part. Keep every rule linear in the line length. Tools return only `redactedLines`.

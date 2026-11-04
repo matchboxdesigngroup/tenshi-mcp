@@ -41,5 +41,12 @@ jobs:
       - name: Install (lockfile)
         run: npm ci
 
+      # Never-exec guard (tenshi#20): fails if any file under src/ could reach
+      # a process, remote-command, dynamic-loading or code-generation API, or
+      # imports a module outside its allowlist. Needs acorn from node_modules.
+      # npm test runs it too; this step names the failure.
+      - name: Never-exec guard (static)
+        run: node scripts/no-exec-guard.mjs
+
       - name: Unit tests (Vitest, SSH mocked)
         run: npm test
