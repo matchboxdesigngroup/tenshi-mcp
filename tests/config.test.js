@@ -473,6 +473,19 @@ describe('loadRegistry allowlist', () => {
     expect(err.message).toContain(`sites.example.com.${field === 'allow' ? 'allow' : `allow.${field}`}`)
   })
 
+  it.each([
+    ['extensions', { extensions: 'php', directories: ['.'] }, 'must be an array of extensions'],
+    ['extensions', { extensions: '', directories: ['.'] }, 'must be an array of extensions'],
+    ['extensions', { extensions: 'x'.repeat(51), directories: ['.'] }, 'must be an array of extensions'],
+    ['directories', { extensions: ['.php'], directories: 'wp-content' }, 'must be an array of directories'],
+    ['directories', { extensions: ['.php'], directories: '' }, 'must be an array of directories'],
+    ['directories', { extensions: ['.php'], directories: 'x'.repeat(51) }, 'must be an array of directories'],
+    ['extensions', { directories: ['.'] }, 'is required']
+  ])('reports a non-array allow.%s with exactly one fixed message', async (field, allow, message) => {
+    const err = await loadError(withSites({ 'example.com': { ...SITE, allow } }))
+    expect(err.message.split('\n')).toEqual(['Registry is invalid:', `  server "testserver": sites.example.com.allow.${field}: ${message}`])
+  })
+
   it('accepts a directory of exactly 512 UTF-16 units', async () => {
     const dir = '\u{1F600}'.repeat(256)
     await withServersFile(withSites({ 'example.com': { ...SITE, allow: { extensions: ['.php'], directories: [dir] } } }), async ({ loadRegistry, getSiteConfig }) => {
