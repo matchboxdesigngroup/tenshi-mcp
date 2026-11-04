@@ -140,19 +140,35 @@ describe('the registry counts non-empty fields in UTF-16 units', () => {
     user: 'deploy',
     privateKeyPath: '~/.ssh/id_rsa',
     hostKeys: [VECTORS.ed25519.fingerprint],
-    sites: { 'example.com': { wordpressRoot: '/var/www/example.com/public', logDir: '/var/log/nginx' } }
+    sites: { 'example.com': { wordpressRoot: '/var/www/example.com/public', logDir: '/var/log/nginx', allow: { extensions: ['.php'], directories: ['.'] } } }
   }
   const fields = [
     ['id', value => ({ ...server, id: value }), 'id'],
     ['label', value => ({ ...server, label: value }), 'label'],
     ['host', value => ({ ...server, host: value }), 'host'],
     ['user', value => ({ ...server, user: value }), 'user'],
-    ['privateKeyPath', value => ({ ...server, privateKeyPath: value }), 'privateKeyPath'],
+    ['privateKeyPath', value => ({ ...server, privateKeyPath: value }), 'privateKeyPath']
+  ]
+  // Roots must be absolute and canonical (see tests/config.test.js); their
+  // cap of 1024 counts UTF-16 units.
+  const ROOT_CASES = [
+    ['empty', '', false],
+    ['1024 units of ASCII', '/' + 'a'.repeat(1023), true],
+    ['1025 units of ASCII', '/' + 'a'.repeat(1024), false],
+    ['1024 units with astral characters', '/' + ASTRAL.repeat(511) + 'a', true],
+    ['1025 units with astral characters', '/' + ASTRAL.repeat(512), false],
+    ['a lone surrogate', '/' + HIGH, false]
+  ]
+  const roots = [
     ['wordpressRoot', value => ({ ...server, sites: { 'example.com': { ...server.sites['example.com'], wordpressRoot: value } } }), 'sites.example.com.wordpressRoot'],
     ['logDir', value => ({ ...server, sites: { 'example.com': { ...server.sites['example.com'], logDir: value } } }), 'sites.example.com.logDir']
   ]
-  const table = fields.flatMap(([field, build, issuePath]) =>
-    MIN_ONE_CASES.map(([label, value, ok]) => [`${field}: ${label}`, build(value), ok, issuePath]))
+  const table = [
+    ...fields.flatMap(([field, build, issuePath]) =>
+      MIN_ONE_CASES.map(([label, value, ok]) => [`${field}: ${label}`, build(value), ok, issuePath])),
+    ...roots.flatMap(([field, build, issuePath]) =>
+      ROOT_CASES.map(([label, value, ok]) => [`${field}: ${label}`, build(value), ok, issuePath]))
+  ]
 
   it.each(table)('%s', async (_label, entry, accepted, issuePath) => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'tenshi-mcp-bounds-registry-'))

@@ -1,7 +1,7 @@
 [
   {
     "name": "read_log",
-    "description": "Return the last lines of a WordPress log (debug/error/access) for a configured site. Only the last 256 KB of the log are read and searched.",
+    "description": "Return the last lines of a WordPress log (debug/error/access) for a configured site. Only the last 256 KB of the log are read and searched. Lines that look like credentials are replaced by a fixed marker before filtering.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -44,7 +44,7 @@
   },
   {
     "name": "read_file",
-    "description": "Read the start of a regular file under the WordPress root of a configured site",
+    "description": "Read the start of a regular file under the WordPress root of a configured site. Only files whose extension and directory the site allows are served; configuration files with credentials, environment files, dumps, backups, keys and hidden files never are. Lines that look like credentials are replaced by a fixed marker.",
     "inputSchema": {
       "type": "object",
       "properties": {

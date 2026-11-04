@@ -16,6 +16,14 @@
 //   { content, fstatType: 'fifo' }           STAT/LSTAT report a regular file,
 //                                            FSTAT on the open handle a FIFO
 //                                            (the type changed after the check)
+//   { content, uid: 0, gid: 0, perm: 0o600 } owner and permission bits (default
+//                                            1000, 1000, 0o644)
+//
+// A hard link is the same node object under two paths: both names report the
+// same content and attributes, and realpath returns the name that was asked
+// for, as on a real server. Tests change the tree while a call runs with
+// afterOp(op, path, fn) (fn runs once, right after the fake answered `op`
+// for exactly `path`) and setEntry(path, node).
 
 import { createHash } from 'crypto'
 import { writeFileSync, mkdtempSync, rmSync, chmodSync } from 'fs'
@@ -119,7 +127,8 @@ class FakeFs {
     else if (node.symlink) { mode = S_IFLNK | 0o777; size = node.symlink.length }
     else if (node.endless) size = node.size ?? 0
     else size = Buffer.byteLength(node.content ?? '')
-    return { mode, uid: 1000, gid: 1000, size, atime: now, mtime: now }
+    if (!node.dir && !node.symlink && node.perm !== undefined) mode = S_IFREG | node.perm
+    return { mode, uid: node.uid ?? 1000, gid: node.gid ?? 1000, size, atime: now, mtime: now }
   }
 }
 
@@ -159,6 +168,16 @@ export async function startFakeSftpServer({ files }) {
     events.ops.push({ op, ...extra })
   }
 
+  /** @type {{ op: string, path: string, fn: () => void }[]} */
+  let hooks = []
+  /** Run, once, the hooks registered for `op` on exactly `path`. Called after the reply was sent. */
+  function runHooks(op, p) {
+    const due = hooks.filter(h => h.op === op && h.path === p)
+    if (due.length === 0) return
+    hooks = hooks.filter(h => !due.includes(h))
+    for (const h of due) h.fn()
+  }
+
   function handleSftp(sftp) {
     events.sftpSessionsOpened++
     let closedCounted = false
@@ -183,15 +202,18 @@ export async function startFakeSftpServer({ files }) {
       try { resolved = fsTree.resolve(p, true) } catch { return sftp.status(reqid, STATUS_CODE.FAILURE) }
       if (resolved === undefined) return sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE)
       sftp.name(reqid, [{ filename: resolved, longname: resolved, attrs: {} }])
+      runHooks('REALPATH', p)
     })
 
     const statLike = followLast => (reqid, p) => {
-      record(followLast ? 'STAT' : 'LSTAT', { path: p })
+      const op = followLast ? 'STAT' : 'LSTAT'
+      record(op, { path: p })
       let resolved
       try { resolved = fsTree.resolve(p, followLast) } catch { return sftp.status(reqid, STATUS_CODE.FAILURE) }
       const node = resolved !== undefined ? fsTree.node(resolved) : undefined
       if (!node) return sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE)
       sftp.attrs(reqid, fsTree.attrs(resolved, node))
+      runHooks(op, p)
     }
     sftp.on('STAT', statLike(true))
     sftp.on('LSTAT', statLike(false))
@@ -212,6 +234,7 @@ export async function startFakeSftpServer({ files }) {
       const handle = Buffer.alloc(4)
       handle.writeUInt32BE(id, 0)
       sftp.handle(reqid, handle)
+      runHooks('OPEN', p)
     })
 
     const lookup = handle => (handle.length === 4 ? handles.get(handle.readUInt32BE(0)) : undefined)
@@ -313,6 +336,18 @@ export async function startFakeSftpServer({ files }) {
       authGate = new Promise(resolve => { release = resolve })
       return () => { authGate = null; release() }
     },
+    /**
+     * Run `fn` once, right after the fake has answered `op` ('REALPATH',
+     * 'LSTAT', 'STAT' or 'OPEN') for exactly `path`: the next request already
+     * sees the change, as if the file were swapped between two requests.
+     */
+    afterOp(op, path, fn) {
+      hooks.push({ op, path, fn })
+    },
+    /** Put `node` at `path`, replacing whatever was there. */
+    setEntry(path, node) {
+      fsTree.entries.set(posix.normalize(path), node)
+    },
     /** Count of SSH connections currently open. */
     openConnections: () => clients.size,
     /** End every open SSH connection from the server side (the pool sees a drop). */
@@ -338,6 +373,7 @@ export async function startFakeSftpServer({ files }) {
       events.readBytesServed = 0
       events.pendingReads = 0
       events.openHandles = 0
+      hooks = []
     },
     async close() {
       for (const c of clients) c.end()
@@ -348,28 +384,51 @@ export async function startFakeSftpServer({ files }) {
 }
 
 /**
+ * Allowlist given to fake-registry sites that do not set their own: every
+ * directory, a few plain-text extensions. Tests about the policy set `allow`
+ * explicitly.
+ */
+export const TEST_ALLOW = Object.freeze({ extensions: ['.php', '.txt', '.bin', '.log'], directories: ['.'] })
+
+/** The site map with TEST_ALLOW added to every site that has no `allow`. */
+export function withTestAllow(sites) {
+  return Object.fromEntries(Object.entries(sites).map(([name, site]) => [name, { allow: TEST_ALLOW, ...site }]))
+}
+
+/**
+ * Registry JSON for a server entry pointing at the fake. See loadFakeRegistry.
+ */
+export function fakeServerEntry(fake, sites, serverId = 'fake-server', options = {}) {
+  return {
+    id: serverId,
+    label: 'Fake server',
+    host: options.host ?? fake.host,
+    port: options.port ?? fake.port,
+    user: fake.username,
+    privateKeyPath: fake.clientKeyPath,
+    hostKeys: options.hostKeys ?? [fake.hostKeyFingerprint],
+    sites: withTestAllow(sites)
+  }
+}
+
+/**
  * Write a registry pointing at the fake, load it through the real loader and
  * return the env restore function. The server is pinned to the fake's host
  * key unless `options.hostKeys` is given; `options.host` and `options.port`
  * point it somewhere else (for example a forwarder in front of the fake).
+ * Sites without `allow` get TEST_ALLOW.
  * @param {Awaited<ReturnType<typeof startFakeSftpServer>>} fake
- * @param {Record<string, { wordpressRoot: string, logDir: string }>} sites
+ * @param {Record<string, { wordpressRoot: string, logDir: string, allow?: object }>} sites
  * @param {{ hostKeys?: string[], host?: string, port?: number }} [options]
  */
 export async function loadFakeRegistry(fake, sites, serverId = 'fake-server', extraServers = [], options = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'tenshi-mcp-registry-'))
   const registryPath = join(dir, 'registry.json')
   writeFileSync(registryPath, JSON.stringify({
-    servers: [{
-      id: serverId,
-      label: 'Fake server',
-      host: options.host ?? fake.host,
-      port: options.port ?? fake.port,
-      user: fake.username,
-      privateKeyPath: fake.clientKeyPath,
-      hostKeys: options.hostKeys ?? [fake.hostKeyFingerprint],
-      sites
-    }, ...extraServers]
+    servers: [
+      fakeServerEntry(fake, sites, serverId, options),
+      ...extraServers.map(s => ({ ...s, sites: withTestAllow(s.sites ?? {}) }))
+    ]
   }))
   const previous = process.env.TENSHI_MCP_SERVERS_PATH
   process.env.TENSHI_MCP_SERVERS_PATH = registryPath

@@ -160,6 +160,7 @@ describe('read_log output shape and caps', () => {
       returnedLines: 5,
       content: DEBUG_LINES.slice(-5).join('\n'),
       truncated: { window: false, longLines: 0, bytes: false },
+      redactedLines: 0,
       retrievedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/)
     })
     expect(JSON.stringify(result)).not.toContain('/var/')
@@ -289,9 +290,11 @@ describe('read_log confinement and refusals', () => {
     expect(fake.events.openHandles).toBe(0)
   })
 
-  it('follows a symlink that stays inside the root', async () => {
-    const result = await readLogHandler({ site: 'inside.example', log: 'debug', lines: 10 })
-    expect(result.content).toBe('inside root')
+  it('refuses a log that is a symlink to another file inside the root, without sending OPEN', async () => {
+    // Only the configured log path is served, never what a link there points at.
+    const err = await failure({ site: 'inside.example', log: 'debug', lines: 10 })
+    expect(err.message).toBe(NOT_AVAILABLE)
+    expect(fake.events.ops.filter(o => o.op === 'OPEN')).toEqual([])
   })
 
   it.each([['unknown.example'], ['__proto__'], ['constructor'], ['toString'], ['hasOwnProperty']])(

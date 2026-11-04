@@ -7,6 +7,7 @@ import ssh2 from 'ssh2'
 import {
   startFakeSftpServer,
   loadFakeRegistry,
+  TEST_ALLOW,
   nonSftpRequests,
   NO_NON_SFTP_REQUESTS
 } from './helpers/fake-sftp-server.js'
@@ -198,7 +199,7 @@ describe('per-call timeout', () => {
         {
           id: SERVER_ID, label: 'Fake', host: fake.host, port: fake.port,
           user: fake.username, privateKeyPath: fake.clientKeyPath, hostKeys: [fake.hostKeyFingerprint],
-          sites: { 'example.com': { wordpressRoot: '/srv/data', logDir: '/srv/data' } }
+          sites: { 'example.com': { wordpressRoot: '/srv/data', logDir: '/srv/data', allow: TEST_ALLOW } }
         },
         {
           id: 'silent', label: 'Silent', host: '127.0.0.1', port: silent.address().port,

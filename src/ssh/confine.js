@@ -1,17 +1,45 @@
 import { posix } from 'path'
 import { ERROR_CODES, ToolError } from '../errors.js'
+import { isDenied } from '../policy/paths.js'
 
-// Path confinement for every tool that reads a file. Two layers:
-//   1. Lexical: the relative path must stay under the configured root after
-//      normalisation. Tools call confineLexically before opening a
-//      connection; openConfinedFile repeats it as a second layer.
+// Path confinement and the sensitive-file policy for every tool that reads a
+// file. Layers, in order:
+//   1. Lexical, before any connection: the caller's relative path must be
+//      plain text (no NUL, control or format characters, backslashes, percent
+//      signs, look-alikes of `.`, `/` or `\`, or unpaired surrogates), and
+//      must stay under the configured root after normalisation. The
+//      normalised path must pass the policy: the built-in denylist and the
+//      tool's allow rule. Tools call checkLexically before opening a
+//      connection; openConfinedFile repeats it.
 //   2. Canonical, on the server: the root and the target are resolved with
-//      SFTP realpath (symlinks followed) and the target must lie strictly
-//      under the canonical root, compared by path segment, never by string
-//      prefix. The target must be a regular file (lstat before open, fstat on
-//      the open handle).
+//      SFTP realpath (symlinks followed). Replies that are not in canonical
+//      form are refused, not normalised. The target must lie strictly under
+//      the canonical root, compared by path segment, never by string prefix,
+//      and its path relative to the canonical root must pass the policy
+//      again (a symlink with an allowed name can point at a denied file).
+//   3. Type and identity: lstat on the canonical path must show a regular
+//      file (not a link); after open, fstat on the handle must show a regular
+//      file with the same type, permissions and owner as the lstat, and a
+//      second realpath of the canonical path must return it unchanged.
+//
+// Residual (check then open): SFTP v3 has no O_NOFOLLOW and no way to bind
+// an open handle to an inode, so a path swapped between the checks and OPEN
+// can make the server open another file. Layer 3 detects a swap that is
+// still in place after the open, or that changed the file's type, mode or
+// owner; a swap that is reverted before the second realpath and keeps those
+// attributes is not detected. Nothing is read from a handle that fails
+// layer 3. Hard links cannot be detected at all over SFTP v3 (the attributes
+// carry no link count or inode): a hard link inside the root, also one put
+// in place of a checked file with the same attributes, is served as a regular
+// file under its own name, subject to the policy and to redaction.
+// Server-side confinement (a read-only account, chroot or per-site user) is
+// the backstop for both.
 
 const MAX_RELATIVE_PATH_LENGTH = 1024
+
+// C0 and C1 controls, DEL, format characters (bidirectional overrides,
+// zero-width characters) and the Unicode line and paragraph separators.
+const UNSAFE_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
 
 function notAvailable() {
   return new ToolError(ERROR_CODES.NOT_AVAILABLE)
@@ -63,6 +91,21 @@ export function isStrictlyWithin(root, target) {
 }
 
 /**
+ * True when `text` contains a character that is not `.`, `/` or `\` itself
+ * but becomes one of them under Unicode compatibility normalisation (for
+ * example full-width `．`, `／`, `＼` or the two-dot leader `‥`). No layer of
+ * this server normalises paths that way, but a server or file system might.
+ * @param {string} text
+ */
+function hasPathSyntaxLookalike(text) {
+  for (const ch of text) {
+    if (ch === '.' || ch === '/' || ch === '\\') continue
+    if (/[./\\]/.test(ch.normalize('NFKC'))) return true
+  }
+  return false
+}
+
+/**
  * Check the caller's relative path without touching the network. Returns the
  * normalised relative path (no leading `./`, no `..` segments) or throws
  * E_NOT_AVAILABLE.
@@ -73,7 +116,11 @@ export function confineLexically(root, relativePath) {
   if (typeof root !== 'string' || !posix.isAbsolute(root)) throw notAvailable()
   if (typeof relativePath !== 'string' || relativePath.length === 0) throw notAvailable()
   if (relativePath.length > MAX_RELATIVE_PATH_LENGTH) throw notAvailable()
-  if (relativePath.includes('\0')) throw notAvailable()
+  if (relativePath.includes('\0') || UNSAFE_CHARS.test(relativePath) || !relativePath.isWellFormed()) throw notAvailable()
+  // A backslash is a separator on some SFTP servers, and a percent sign
+  // starts an encoding that some layer might decode: neither is accepted.
+  if (relativePath.includes('\\') || relativePath.includes('%')) throw notAvailable()
+  if (hasPathSyntaxLookalike(relativePath)) throw notAvailable()
   if (posix.isAbsolute(relativePath)) throw notAvailable()
   const resolved = posix.resolve(root, relativePath)
   if (!isStrictlyWithin(root, resolved)) throw notAvailable()
@@ -81,29 +128,63 @@ export function confineLexically(root, relativePath) {
 }
 
 /**
- * Open `relativePath` under `root` for reading, confined as described at the
- * top of this module. Returns the open handle, its size and the canonical
- * path relative to the canonical root. The caller closes the handle.
- *
- * Follow-up seam: the sensitive-file allowlist and denylist, and a realpath
- * re-check after open, are evaluated on `canonicalTarget` here, so every
- * path-reading tool gets them at once.
+ * The policy for a path relative to the root: the built-in denylist always,
+ * then the tool's allow rule. Throws E_NOT_AVAILABLE when either refuses.
+ * @param {string} relativePath
+ * @param {(relativePath: string) => boolean} allow
+ * @param {{ trustedPrefix?: string }} [denyOptions] see isDenied
+ */
+function enforcePolicy(relativePath, allow, denyOptions) {
+  if (typeof allow !== 'function') throw new ToolError(ERROR_CODES.INTERNAL)
+  if (isDenied(relativePath, denyOptions)) throw notAvailable()
+  if (allow(relativePath) !== true) throw notAvailable()
+}
+
+/**
+ * Every check that needs no server: lexical confinement, then the policy on
+ * the normalised path. Returns the normalised relative path.
+ * @param {string} root configured absolute root
+ * @param {string} relativePath caller input or fixed log path
+ * @param {(relativePath: string) => boolean} allow the tool's allow rule
+ * @param {{ trustedPrefix?: string }} [denyOptions] see isDenied; registry values only
+ */
+export function checkLexically(root, relativePath, allow, denyOptions) {
+  const normalised = confineLexically(root, relativePath)
+  enforcePolicy(normalised, allow, denyOptions)
+  return normalised
+}
+
+/** Same file type, permissions and owner, as far as the server reported them. */
+function sameIdentity(a, b) {
+  return a.mode === b.mode && a.uid === b.uid && a.gid === b.gid
+}
+
+/**
+ * Open `relativePath` under `root` for reading, confined and policy-checked
+ * as described at the top of this module. Returns the open handle, its size
+ * and the canonical path relative to the canonical root. The caller closes
+ * the handle.
  *
  * @param {import('./sftp.js').ReadOnlySftpSession} session
  * @param {string} root configured absolute root (WordPress root or log dir)
  * @param {string} relativePath path under root
+ * @param {(relativePath: string) => boolean} allow the tool's allow rule,
+ *   applied to the normalised and to the canonical relative path
+ * @param {{ trustedPrefix?: string }} [denyOptions] see isDenied; registry values only
  * @returns {Promise<{ handle: import('./sftp.js').ReadOnlyHandle, size: number, relativePath: string }>}
  */
-export async function openConfinedFile(session, root, relativePath) {
-  const normalised = confineLexically(root, relativePath)
+export async function openConfinedFile(session, root, relativePath, allow, denyOptions) {
+  const normalised = checkLexically(root, relativePath, allow, denyOptions)
 
   // The server's answers are checked as given: a reply that is not in
   // canonical form is refused rather than normalised here.
   const canonicalRoot = await session.realpath(root)
-  if (!isCanonicalPath(canonicalRoot)) throw notAvailable()
+  if (!isCanonicalPath(canonicalRoot) || canonicalRoot === '/') throw notAvailable()
   const canonicalTarget = await session.realpath(posix.join(canonicalRoot, normalised))
   if (!isCanonicalPath(canonicalTarget)) throw notAvailable()
   if (!isStrictlyWithin(canonicalRoot, canonicalTarget)) throw notAvailable()
+  const canonicalRelative = posix.relative(canonicalRoot, canonicalTarget)
+  enforcePolicy(canonicalRelative, allow, denyOptions)
 
   // realpath resolved every link, so the target itself must not be a link
   // and must be a regular file.
@@ -114,11 +195,11 @@ export async function openConfinedFile(session, root, relativePath) {
   try {
     const stats = await handle.fstat()
     if (!stats.isFile() || !Number.isSafeInteger(stats.size) || stats.size < 0) throw notAvailable()
-    return {
-      handle,
-      size: stats.size,
-      relativePath: posix.relative(canonicalRoot, canonicalTarget)
-    }
+    // The opened file must be the one that was checked: same type,
+    // permissions and owner, and the path must still resolve to itself.
+    if (!sameIdentity(linkStats, stats)) throw notAvailable()
+    if (await session.realpath(canonicalTarget) !== canonicalTarget) throw notAvailable()
+    return { handle, size: stats.size, relativePath: canonicalRelative }
   } catch (err) {
     await handle.close().catch(() => {})
     throw err

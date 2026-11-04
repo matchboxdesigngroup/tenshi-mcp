@@ -13,7 +13,11 @@
       "sites": {
         "example.com": {
           "wordpressRoot": "/var/www/example.com/public",
-          "logDir": "/var/log/nginx"
+          "logDir": "/var/log/nginx",
+          "allow": {
+            "extensions": [".php", ".txt", ".md", ".css", ".js", ".json", ".html"],
+            "directories": ["wp-content/plugins", "wp-content/themes"]
+          }
         }
       }
     }
