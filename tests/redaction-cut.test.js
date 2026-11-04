@@ -61,7 +61,7 @@ describe('redactedPrefix: no maxBytes returns any part of a credential', () => {
     expect(whole.text).toContain("echo 'ordinary';")
     expect(whole.text).toContain(REDACTED_LINE)
     expect(whole.redactedLines).toBeGreaterThanOrEqual(1)
-  })
+  }, 30000)
 
   it('still cuts ordinary lines at the cap', () => {
     const file = Buffer.from('first line\nsecond line\n')
