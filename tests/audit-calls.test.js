@@ -9,7 +9,11 @@ import {
   NO_NON_SFTP_REQUESTS
 } from './helpers/fake-sftp-server.js'
 import { VECTORS } from './helpers/host-key-vectors.js'
+import { mkdtempSync, openSync, closeSync, readFileSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { createAuditLog, MAX_RECORD_BYTES, AUDIT_EVENT, JOB_ID_META_KEY } from '../src/audit/log.js'
+import { createFdSink, FILE_BATCH_BYTES } from '../src/audit/sink.js'
 import { createServer, AUDITED_TOOLS, resolveSiteIds } from '../src/server.js'
 import { closeAll } from '../src/ssh/client.js'
 import { MAX_PATH_LENGTH } from '../src/tools/read-file.js'
@@ -298,6 +302,68 @@ describe('one record per call', () => {
   })
 })
 
+describe('requests the SDK refuses before the dispatcher', () => {
+  // Driven over a raw in-memory transport: the SDK client would refuse to
+  // send most of these.
+  async function rawSession() {
+    const sink = memorySink()
+    const audit = createAuditLog({ sink, tools: AUDITED_TOOLS, resolveSite: resolveSiteIds })
+    const server = createServer({ audit })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    await server.connect(serverTransport)
+    const replies = new Map()
+    clientTransport.onmessage = message => { if ('id' in message) replies.set(message.id, message) }
+    await clientTransport.start()
+    let id = 0
+    async function request(method, params) {
+      const mine = ++id
+      await clientTransport.send({ jsonrpc: '2.0', id: mine, method, params })
+      for (let i = 0; i < 200 && !replies.has(mine); i++) await new Promise(r => setTimeout(r, 5))
+      return replies.get(mine)
+    }
+    await request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'raw', version: '0' } })
+    await clientTransport.send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+    return { sink, request, close: () => clientTransport.close() }
+  }
+
+  const kinds = [
+    ['no name', { arguments: { site: 'example.com', path: SECRET_PATH_WORD } }, { tool: null, toolName: { type: 'undefined' } }],
+    ['a name that is not a string', { name: { zq: SECRET_TOOL }, arguments: { site: 'example.com' } }, { tool: null, toolName: { type: 'object' } }],
+    ['arguments that are not an object', { name: 'read_file', arguments: SECRET_PATH_WORD }, { tool: 'read_file', request: { arguments: 'string' } }],
+    ['task creation', { name: 'read_file', arguments: { site: 'example.com', path: 'wp-content/notes.txt' }, task: { ttl: 1000 } }, { tool: 'read_file', site: 'example.com' }]
+  ]
+
+  it.each(kinds)('records a tools/call with %s once, as invalid_input, without running tool code', async (_label, params, expected) => {
+    const s = await rawSession()
+    try {
+      const reply = await s.request('tools/call', { ...params, _meta: { [JOB_ID_META_KEY]: 'hs-raw' } })
+      expect(reply.error).toBeDefined()
+      expect(s.sink.lines).toHaveLength(1)
+      const record = JSON.parse(s.sink.lines[0])
+      expect(record).toMatchObject({ outcome: 'refused', code: 'E_INVALID_INPUT', reason: 'invalid_input', jobId: 'hs-raw', redactedLines: null, ...expected })
+      expect(record.bytesReturned).toBe(Buffer.byteLength(reply.error.message, 'utf8'))
+      expect(s.sink.lines[0]).not.toContain('zq')
+      expect(fake.events.opens).toEqual([])
+    } finally {
+      await s.close()
+    }
+  })
+
+  it('records one line per call when refused and accepted requests are mixed, and none for other methods', async () => {
+    const s = await rawSession()
+    try {
+      await s.request('tools/list', {})
+      await s.request('tools/call', { name: 'read_file', arguments: { site: SECRET_SITE, path: 'x.txt' } })
+      await s.request('tools/call', { arguments: {} })
+      await s.request('tools/call', { name: 'read_file', arguments: { site: SECRET_SITE, path: 'x.txt' } })
+      expect(s.sink.lines.map(l => JSON.parse(l).reason)).toEqual(['unknown_site', 'invalid_input', 'unknown_site'])
+      expect(s.sink.lines.map(l => JSON.parse(l).seq)).toEqual([1, 2, 3])
+    } finally {
+      await s.close()
+    }
+  })
+})
+
 describe('no content and no secrets in any record', () => {
   // Deterministic pseudo-random strings with a prefix that is not hex, so a
   // match can only be the value itself, never part of a hash.
@@ -380,6 +446,52 @@ describe('log injection and size bounds', () => {
     const log = await callOnce(conn, 'read_log', { site: 'example.com', log: 'debug', lines: 500, filter: '\u{1F600}'.repeat(MAX_FILTER_LENGTH / 2) }, { [JOB_ID_META_KEY]: jobId })
     expect(log.record.oversize).toBeUndefined()
     expect(Buffer.byteLength(log.line)).toBeLessThanOrEqual(MAX_RECORD_BYTES)
+  })
+})
+
+describe('bursts', () => {
+  it('records every call of a burst within the queue bound, with no drops', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tenshi-mcp-burst-'))
+    const file = join(dir, 'audit.jsonl')
+    const fd = openSync(file, 'a', 0o600)
+    const sink = createFdSink(fd, { batchBytes: FILE_BATCH_BYTES })
+    const c = await connect({ sink })
+    try {
+      const n = 3000
+      await Promise.all(Array.from({ length: n }, () => c.client.callTool({ name: 'read_file', arguments: { site: SECRET_SITE, path: 'x.txt' } })))
+      await sink.flush(10000)
+      const records = readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
+      expect(sink.dropped).toBe(0)
+      expect(records).toHaveLength(n)
+      expect(records.map(r => r.seq).sort((a, b) => a - b)).toEqual(Array.from({ length: n }, (_, i) => i + 1))
+      expect(records.every(r => r.auditDropped === 0)).toBe(true)
+    } finally {
+      await c.close()
+      closeSync(fd)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30000)
+
+  it('counts the records of a burst beyond the queue bound', async () => {
+    let release
+    const gate = new Promise(resolve => { release = resolve })
+    const lines = []
+    const write = (fd, buf, off, len, pos, cb) => { gate.then(() => { lines.push(buf.toString()); cb(null, len) }) }
+    const sink = createFdSink(99, { write, maxPending: 20, batchBytes: FILE_BATCH_BYTES })
+    const c = await connect({ sink })
+    try {
+      await Promise.all(Array.from({ length: 50 }, () => c.client.callTool({ name: 'read_file', arguments: { site: SECRET_SITE, path: 'x.txt' } })))
+      expect(sink.dropped).toBe(30)
+      release()
+      await sink.flush(5000)
+      await c.client.callTool({ name: 'read_file', arguments: { site: SECRET_SITE, path: 'x.txt' } })
+      await sink.flush(5000)
+      const records = lines.join('').split('\n').filter(Boolean).map(l => JSON.parse(l))
+      expect(records).toHaveLength(21)
+      expect(records.at(-1)).toMatchObject({ seq: 51, auditDropped: 30 })
+    } finally {
+      await c.close()
+    }
   })
 })
 

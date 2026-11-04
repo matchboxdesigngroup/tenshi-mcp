@@ -46,12 +46,14 @@ function errorResult(toolError) {
  * The MCP server with both tools, every `tools/call` request recorded by
  * `audit` (one record each, see src/audit/log.js). Throws if the audit
  * wrapper could not be installed, so the server never runs unaudited.
+ * Connect only through the returned `connect`, which wraps the transport
+ * so that requests the SDK refuses before the dispatcher are recorded too.
  *
  * @param {{ audit: ReturnType<typeof import('./audit/log.js').createAuditLog>, timeoutMs?: number }} options
  *   timeoutMs is a test hook passed to the handlers; src/index.js passes none
  */
 export function createServer({ audit, timeoutMs }) {
-  if (!audit || typeof audit.wrapCallHandler !== 'function' || typeof audit.report !== 'function') {
+  if (!audit || typeof audit.wrapCallHandler !== 'function' || typeof audit.report !== 'function' || typeof audit.wrapTransport !== 'function') {
     throw new Error('createServer requires an audit log')
   }
   const server = new McpServer({
@@ -123,5 +125,9 @@ export function createServer({ audit, timeoutMs }) {
 
   lowLevel.setRequestHandler = setRequestHandler
   if (!audit.installed) throw new Error('audit log not installed on tools/call')
-  return server
+  return {
+    /** @param {import('@modelcontextprotocol/sdk/shared/transport.js').Transport} transport */
+    connect: transport => server.connect(audit.wrapTransport(transport)),
+    close: () => server.close()
+  }
 }

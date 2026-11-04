@@ -4,10 +4,10 @@ import os from 'os'
 import path from 'path'
 import { execFileSync } from 'child_process'
 import {
-  createAuditLog, serializeRecord, extensionClass, outcomeOf, MAX_RECORD_BYTES, AUDIT_EVENT
+  createAuditLog, serializeRecord, extensionClass, outcomeOf, MAX_RECORD_BYTES, AUDIT_EVENT, MAX_PENDING_CALLS
 } from '../src/audit/log.js'
 import {
-  createFdSink, openAuditSink, AuditConfigError, AUDIT_CONFIG_MESSAGE, AUDIT_LOG_ENV
+  createFdSink, openAuditSink, AuditConfigError, AUDIT_CONFIG_MESSAGE, AUDIT_LOG_ENV, FILE_BATCH_BYTES
 } from '../src/audit/sink.js'
 import { ERROR_CODES, REASONS, ToolError, toToolError } from '../src/errors.js'
 
@@ -113,6 +113,20 @@ describe('createAuditLog', () => {
     expect(r1.instance).not.toBe(r3.instance)
   })
 
+  it('bounds the table of unanswered requests and counts what it evicts', async () => {
+    const sink = sinkOf()
+    const audit = createAuditLog({ sink, tools, resolveSite: () => null })
+    const inner = { start: async () => {}, close: async () => {}, send: async () => {} }
+    const wrapped = audit.wrapTransport(inner)
+    wrapped.onmessage = () => {}
+    for (let id = 1; id <= MAX_PENDING_CALLS + 3; id++) inner.onmessage({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 't' } })
+    // The oldest three were evicted: answering one of them writes nothing.
+    await wrapped.send({ jsonrpc: '2.0', id: 1, error: { code: -32602, message: 'x' } })
+    expect(sink.lines).toHaveLength(0)
+    await wrapped.send({ jsonrpc: '2.0', id: MAX_PENDING_CALLS + 3, error: { code: -32602, message: 'bad' } })
+    expect(JSON.parse(sink.lines[0])).toMatchObject({ reason: 'invalid_input', bytesReturned: 3, auditDropped: 3 })
+  })
+
   it('records a handler that throws as an internal error and rethrows', async () => {
     const sink = sinkOf()
     const audit = createAuditLog({ sink, tools, resolveSite: () => null })
@@ -212,13 +226,64 @@ describe('createFdSink', () => {
     expect(sink.dropped).toBe(0)
   })
 
-  it('drops and counts a line whose write fails, then carries on', async () => {
+  it('drops and counts the lines of a write that fails, then carries on', async () => {
     const w = scriptedWrite(['EPIPE', 'throw', 'all'])
     const sink = createFdSink(99, { write: w.write })
+    // a is written alone (EPIPE); b and c are queued meanwhile and go out
+    // together in the next write, which throws.
     expect(() => { sink.write('a\n'); sink.write('b\n'); sink.write('c\n') }).not.toThrow()
     await sink.flush(1000)
-    expect(w.written).toEqual(['c\n'])
-    expect(sink.dropped).toBe(2)
+    expect(sink.dropped).toBe(3)
+    sink.write('d\n')
+    await sink.flush(1000)
+    expect(w.written).toEqual(['d\n'])
+    expect(sink.dropped).toBe(3)
+  })
+
+  it('writes several queued records per write, whole records only, within the batch size', async () => {
+    const w = scriptedWrite(['all'])
+    const sink = createFdSink(99, { write: w.write, batchBytes: 10 })
+    for (const line of ['aaaa\n', 'bbbb\n', 'cccc\n', 'dd\n', 'eeeeeeeeeeeeeeee\n', 'f\n']) sink.write(line)
+    await sink.flush(1000)
+    // The first record goes out alone; then whole records up to 10 bytes,
+    // and a record longer than the batch size on its own.
+    expect(w.written).toEqual(['aaaa\n', 'bbbb\ncccc\n', 'dd\n', 'eeeeeeeeeeeeeeee\n', 'f\n'])
+    expect(sink.dropped).toBe(0)
+  })
+
+  it('completes a partial write that ends inside a batch', async () => {
+    const w = scriptedWrite(['all', 7, 'all'])
+    const sink = createFdSink(99, { write: w.write, batchBytes: 100 })
+    for (const line of ['a\n', 'bbbb\n', 'cccc\n', 'dddd\n']) sink.write(line)
+    await sink.flush(1000)
+    expect(w.written.join('')).toBe('a\nbbbb\ncccc\ndddd\n')
+  })
+
+  it('keeps a burst within the queue bound without loss and counts what is beyond it', async () => {
+    let release
+    const gate = new Promise(resolve => { release = resolve })
+    const lines = []
+    const write = (fd, buf, off, len, pos, cb) => { gate.then(() => { lines.push(buf.toString()); cb(null, len) }) }
+    const sink = createFdSink(99, { write, maxPending: 100, batchBytes: 64 * 1024 })
+    for (let i = 0; i < 100; i++) sink.write(`${i}\n`)
+    expect(sink.dropped).toBe(0)
+    for (let i = 0; i < 7; i++) sink.write('over\n')
+    expect(sink.dropped).toBe(7)
+    release()
+    await sink.flush(1000)
+    expect(lines.join('').split('\n').filter(Boolean)).toEqual(Array.from({ length: 100 }, (_, i) => String(i)))
+  })
+
+  it('writes a burst of 4000 records to a real file without loss', async () => {
+    const file = path.join(tmp, 'burst.jsonl')
+    const fd = fs.openSync(file, 'a', 0o600)
+    const sink = createFdSink(fd, { batchBytes: FILE_BATCH_BYTES })
+    const record = 'x'.repeat(600) + '\n'
+    for (let i = 0; i < 4000; i++) sink.write(record)
+    await sink.flush(10000)
+    fs.closeSync(fd)
+    expect(sink.dropped).toBe(0)
+    expect(fs.statSync(file).size).toBe(4000 * record.length)
   })
 
   it('never blocks on a write that does not complete: the queue is bounded and the rest is counted', async () => {
@@ -279,6 +344,30 @@ describe('openAuditSink', () => {
     fs.writeFileSync(file, '')
     fs.chmodSync(file, 0o640)
     refused(file)
+  })
+
+  it('refuses a file with a second hard link', () => {
+    const real = path.join(tmp, 'linked.jsonl')
+    fs.writeFileSync(real, '', { mode: 0o600 })
+    const other = path.join(tmp, 'linked-again.jsonl')
+    fs.linkSync(real, other)
+    refused(real)
+    refused(other)
+  })
+
+  it('refuses a file in a directory others can write to, unless the directory is sticky', () => {
+    const open = path.join(tmp, 'open-dir')
+    fs.mkdirSync(open)
+    fs.chmodSync(open, 0o777)
+    refused(path.join(open, 'audit.jsonl'))
+    const group = path.join(tmp, 'group-dir')
+    fs.mkdirSync(group)
+    fs.chmodSync(group, 0o770)
+    refused(path.join(group, 'audit.jsonl'))
+    const sticky = path.join(tmp, 'sticky-dir')
+    fs.mkdirSync(sticky)
+    fs.chmodSync(sticky, 0o1777)
+    expect(openAuditSink({ [AUDIT_LOG_ENV]: path.join(sticky, 'audit.jsonl') }).target).toBe('file')
   })
 
   it('refuses a symlink, even to an acceptable file', () => {

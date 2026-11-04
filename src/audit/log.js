@@ -1,9 +1,13 @@
 import { createHmac, randomBytes } from 'crypto'
 import { ERROR_CODES } from '../errors.js'
 
-// Structured audit log: exactly one JSON record per `tools/call` request that
-// reaches the tool dispatcher, including refusals and calls the SDK rejects
-// before a handler runs (unknown tool, invalid arguments). The record field
+// Structured audit log: exactly one JSON record per `tools/call` request the
+// server answers, including refusals, calls the SDK's dispatcher rejects
+// before a handler runs (unknown tool, invalid arguments) and requests the
+// SDK rejects before the dispatcher (no or non-string name, non-object
+// arguments, task creation). Two hooks: wrapTransport sees every request
+// and response; wrapCallHandler sees every call that reaches the
+// dispatcher, where tool callbacks add counts through report(). The record field
 // list in README.md ("Audit log") is the contract for consumers; bump
 // AUDIT_VERSION when a field changes meaning or is removed.
 //
@@ -27,6 +31,12 @@ export const JOB_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
  */
 export const MAX_RECORD_BYTES = 2048
 export const HASH_HEX_CHARS = 16
+/**
+ * Most tools/call requests waiting for an answer that are tracked at once.
+ * A request over the bound evicts the oldest; that one is never recorded and
+ * is counted in auditDropped.
+ */
+export const MAX_PENDING_CALLS = 4096
 
 /**
  * Extension classes recorded for a path argument. Any other extension is
@@ -126,6 +136,8 @@ export function createAuditLog({ sink, tools, resolveSite, now = Date.now, clock
   const key = hashKey ?? randomBytes(32)
   const instanceId = instance ?? randomBytes(8).toString('hex')
   const contexts = new WeakMap()
+  /** tools/call requests seen on the transport and not yet answered, by JSON-RPC id. */
+  const pending = new Map()
   let seq = 0
   let failures = 0
   let installed = false
@@ -168,7 +180,7 @@ export function createAuditLog({ sink, tools, resolveSite, now = Date.now, clock
     return { jobId: valid ? raw : null, jobIdInvalid: !valid }
   }
 
-  function buildRecord({ request, ctx, result, thrown, ts, durationMs }) {
+  function buildRecord({ request, ctx, result, thrown, rejected, ts, durationMs }) {
     const params = typeName(request?.params) === 'object' ? request.params : {}
     const tool = typeof params.name === 'string' && Object.hasOwn(tools, params.name) ? params.name : null
     const args = params.arguments
@@ -179,6 +191,10 @@ export function createAuditLog({ sink, tools, resolveSite, now = Date.now, clock
     if (thrown !== undefined) {
       code = ERROR_CODES.INTERNAL
       reason = 'internal'
+    } else if (rejected) {
+      // Answered by the SDK before the dispatcher: no tool code ran.
+      code = rejected.error ? ERROR_CODES.INVALID_INPUT : ERROR_CODES.INTERNAL
+      reason = rejected.error ? 'invalid_input' : 'internal'
     } else if (ctx.error) {
       code = ctx.error.code
       reason = ctx.error.reason ?? DEFAULT_REASON_BY_CODE[code] ?? 'internal'
@@ -195,7 +211,7 @@ export function createAuditLog({ sink, tools, resolveSite, now = Date.now, clock
     }
     const ok = code === null
 
-    let bytesReturned = 0
+    let bytesReturned = rejected ? rejected.bytes : 0
     for (const item of Array.isArray(result?.content) ? result.content : []) {
       if (item?.type === 'text' && typeof item.text === 'string') bytesReturned += Buffer.byteLength(item.text, 'utf8')
     }
@@ -251,8 +267,13 @@ export function createAuditLog({ sink, tools, resolveSite, now = Date.now, clock
     wrapCallHandler(handler) {
       installed = true
       return /** @type {H} */ (async (request, extra) => {
-        const ts = now()
-        const started = clock()
+        // The transport hook saw the request first: take its arrival time.
+        // The entry is removed below, before the answer is sent, so the
+        // transport hook does not record this request a second time.
+        const key = callKey({ id: extra?.requestId })
+        const entry = key === null ? undefined : pending.get(key)
+        const ts = entry ? entry.ts : now()
+        const started = entry ? entry.started : clock()
         const ctx = { reported: false, error: null, info: null }
         if (extra !== null && typeof extra === 'object') contexts.set(extra, ctx)
         let result
@@ -265,7 +286,40 @@ export function createAuditLog({ sink, tools, resolveSite, now = Date.now, clock
           throw err
         } finally {
           const durationMs = Math.max(0, Math.round(Number(clock() - started) / 1e6))
+              if (entry && pending.get(key) === entry) pending.delete(key)
           emit({ request, ctx, result, thrown, ts, durationMs })
+        }
+      })
+    },
+
+    /**
+     * Wrap an MCP transport so that a tools/call request the SDK answers
+     * without running the dispatcher (it fails the SDK's request schema, or
+     * asks for task creation) is recorded when its answer is sent. Messages
+     * pass through unchanged; an audit failure never affects them.
+     * @param {import('@modelcontextprotocol/sdk/shared/transport.js').Transport} transport
+     */
+    wrapTransport(transport) {
+      return new AuditedTransport(transport, {
+        received(message) {
+          const key = callKey(message)
+          if (key === null || typeName(message.method) !== 'string' || message.method !== 'tools/call') return
+          if (pending.size >= MAX_PENDING_CALLS) {
+            pending.delete(pending.keys().next().value)
+            failures++
+          }
+          pending.set(key, { ts: now(), started: clock(), request: message })
+        },
+        sending(message) {
+          if (message === null || typeof message !== 'object' || 'method' in message) return
+          const key = callKey(message)
+          const entry = key === null ? undefined : pending.get(key)
+          if (!entry) return
+          pending.delete(key)
+          const error = typeName(message.error) === 'object'
+          const bytes = error ? Buffer.byteLength(String(message.error.message ?? ''), 'utf8') : 0
+          const durationMs = Math.max(0, Math.round(Number(clock() - entry.started) / 1e6))
+          emit({ request: entry.request, ctx: { reported: false, error: null, info: null }, rejected: { error, bytes }, ts: entry.ts, durationMs })
         }
       })
     },
@@ -284,4 +338,48 @@ export function createAuditLog({ sink, tools, resolveSite, now = Date.now, clock
       else ctx.info = info
     }
   }
+}
+
+/** Map key for a JSON-RPC id (string or number), or null without one. */
+function callKey(message) {
+  const id = message?.id
+  if (typeof id === 'string') return `s:${id}`
+  if (typeof id === 'number') return `n:${id}`
+  return null
+}
+
+/**
+ * A transport that passes every message through and lets the audit log see
+ * incoming requests and outgoing responses. Hook failures are swallowed.
+ */
+class AuditedTransport {
+  constructor(inner, hooks) {
+    this._inner = inner
+    this._hooks = hooks
+    /** @type {((message: any, extra?: any) => void) | undefined} */
+    this.onmessage = undefined
+    /** @type {(() => void) | undefined} */
+    this.onclose = undefined
+    /** @type {((error: Error) => void) | undefined} */
+    this.onerror = undefined
+    inner.onmessage = (message, extra) => {
+      try { hooks.received(message) } catch { /* never block a message */ }
+      this.onmessage?.(message, extra)
+    }
+    inner.onclose = () => this.onclose?.()
+    inner.onerror = error => this.onerror?.(error)
+  }
+
+  get sessionId() { return this._inner.sessionId }
+
+  start() { return this._inner.start() }
+
+  close() { return this._inner.close() }
+
+  send(message, options) {
+    try { this._hooks.sending(message) } catch { /* never block a message */ }
+    return this._inner.send(message, options)
+  }
+
+  setProtocolVersion(version) { this._inner.setProtocolVersion?.(version) }
 }
