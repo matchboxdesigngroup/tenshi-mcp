@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { boundedString } from '../schema.js'
 import { withSftpSession } from '../ssh/sftp.js'
 import { checkLexically, openConfinedFile } from '../ssh/confine.js'
 import { isAllowed } from '../policy/paths.js'
@@ -108,8 +109,8 @@ export function redactedPrefix(buf, maxBytes) {
 }
 
 const InputSchema = z.object({
-  site: z.string().min(1),
-  path: z.string().min(1).max(MAX_PATH_LENGTH),
+  site: boundedString({ min: 1 }),
+  path: boundedString({ min: 1, max: MAX_PATH_LENGTH }),
   maxBytes: z.number().int().min(1).default(DEFAULT_BYTES)
 })
 

@@ -102,6 +102,35 @@ describe('loadRegistry validation', () => {
       expect(() => loadRegistry()).toThrow()
     })
   })
+
+  it('validates every site entry and names the site and field', async () => {
+    const server = {
+      ...VALID_CONFIG.servers[0],
+      sites: { ...VALID_CONFIG.servers[0].sites, 'broken.example': { wordpressRoot: '/var/www/broken', allow: SITE.allow } }
+    }
+    const err = await loadError({ servers: [server] })
+    const lines = err.message.split('\n')
+    expect(lines).toHaveLength(2)
+    expect(lines[1]).toMatch(/^ {2}server "testserver": sites\.broken\.example\.logDir: /)
+  })
+
+  for (const [name, sites] of Object.entries({ 'a list': [], 'a string': 'example.com', 'null': null })) {
+    it(`refuses sites given as ${name}`, async () => {
+      const err = await loadError({ servers: [{ ...VALID_CONFIG.servers[0], sites }] })
+      const lines = err.message.split('\n')
+      expect(lines).toHaveLength(2)
+      expect(lines[1]).toMatch(/^ {2}server "testserver": sites: /)
+    })
+  }
+
+  it('keeps the sites map keyed by domain', async () => {
+    const sites = { ...VALID_CONFIG.servers[0].sites, 'second.example': { wordpressRoot: '/var/www/second', logDir: '/var/log/second', allow: SITE.allow } }
+    await withServersFile({ servers: [{ ...VALID_CONFIG.servers[0], sites }] }, async ({ loadRegistry, getSiteConfig }) => {
+      loadRegistry()
+      expect(getSiteConfig('testserver', 'second.example')).toEqual({ wordpressRoot: '/var/www/second', logDir: '/var/log/second', allow: SITE.allow, serverId: 'testserver' })
+      expect(getSiteConfig('testserver', 'example.com').wordpressRoot).toBe('/var/www/example.com/public')
+    })
+  })
 })
 
 function withHostKeys(hostKeys, { id = 'testserver', omit = false } = {}) {
@@ -155,6 +184,29 @@ describe('loadRegistry host-key pins', () => {
       const err = await loadError(withHostKeys(hostKeys, options))
       expect(err.message).toContain('server "testserver"')
       expect(err.message).toContain('hostKeys')
+    })
+  }
+
+  // The exact fixed texts, one issue each: zod 4 silently ignores the zod 3
+  // required_error and invalid_type_error params (zod's default wording
+  // would appear instead), and runs length checks on a string that is not
+  // an array (a second issue would appear).
+  const fixedMessages = {
+    'missing field': [withHostKeys(undefined, { omit: true }), 'hostKeys: host-key pins are required (at least one SHA-256 fingerprint)'],
+    'null': [withHostKeys(null), 'hostKeys: must be an array of SHA-256 fingerprints'],
+    'a string instead of an array': [withHostKeys(ED), 'hostKeys: must be an array of SHA-256 fingerprints'],
+    'an empty string instead of an array': [withHostKeys(''), 'hostKeys: must be an array of SHA-256 fingerprints'],
+    'an object instead of an array': [withHostKeys({ 0: ED }), 'hostKeys: must be an array of SHA-256 fingerprints'],
+    'empty array': [withHostKeys([]), 'hostKeys: at least one SHA-256 fingerprint is required'],
+    'more than five pins': [withHostKeys([1, 2, 3, 4, 5, 6].map(fingerprintOfByte)), 'hostKeys: at most 5 fingerprints are allowed'],
+    'duplicate pins': [withHostKeys([ED, ED]), 'hostKeys.1: duplicate fingerprint'],
+    'an invalid pin': [withHostKeys([ED, 'SHA256:not-a-fingerprint']), 'hostKeys.1: not a SHA-256 fingerprint in the OpenSSH form SHA256:<base64>']
+  }
+
+  for (const [name, [config, issue]] of Object.entries(fixedMessages)) {
+    it(`reports ${name} with the fixed message only`, async () => {
+      const err = await loadError(config)
+      expect(err.message).toBe(`Registry is invalid:\n  server "testserver": ${issue}`)
     })
   }
 
@@ -413,11 +465,20 @@ describe('loadRegistry allowlist', () => {
     ['a hidden directory', { extensions: ['.php'], directories: ['.git'] }, 'directories.0'],
     ['a backup directory', { extensions: ['.php'], directories: ['wp-content/ai1wm-backups'] }, 'directories.0'],
     ['a backslash directory', { extensions: ['.php'], directories: ['wp-content\\plugins'] }, 'directories.0'],
+    ['an over-long directory (UTF-16 units)', { extensions: ['.php'], directories: ['\u{1F600}'.repeat(256) + 'a'] }, 'directories.0'],
     ['an unknown field', { extensions: ['.php'], directories: ['.'], denylist: [] }, 'allow'],
     ['not an object', ['.php'], 'allow']
   ])('refuses an allowlist with %s', async (_, allow, field) => {
     const err = await loadError(withSites({ 'example.com': { ...SITE, allow } }))
     expect(err.message).toContain(`sites.example.com.${field === 'allow' ? 'allow' : `allow.${field}`}`)
+  })
+
+  it('accepts a directory of exactly 512 UTF-16 units', async () => {
+    const dir = '\u{1F600}'.repeat(256)
+    await withServersFile(withSites({ 'example.com': { ...SITE, allow: { extensions: ['.php'], directories: [dir] } } }), async ({ loadRegistry, getSiteConfig }) => {
+      loadRegistry()
+      expect(getSiteConfig('testserver', 'example.com').allow.directories).toEqual([dir])
+    })
   })
 
   it('stores extensions lower-cased and without duplicates', async () => {

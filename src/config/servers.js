@@ -1,11 +1,14 @@
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { z } from 'zod'
+import { boundedString } from '../schema.js'
 import { MAX_HOST_KEYS, normaliseFingerprint } from '../ssh/host-key.js'
 import { isValidAllowedDirectory, isValidAllowedExtension } from '../policy/paths.js'
 
 export const MAX_ROOT_LENGTH = 1024
 export const MAX_ALLOW_ENTRIES = 50
+/** Cap on one allow.directories entry, in UTF-16 units. */
+export const MAX_DIRECTORY_LENGTH = 512
 
 /**
  * True for a configured root (`wordpressRoot`, `logDir`): an absolute path
@@ -16,7 +19,8 @@ export const MAX_ALLOW_ENTRIES = 50
  * @param {string} p
  */
 export function isValidRoot(p) {
-  if (typeof p !== 'string' || p.length > MAX_ROOT_LENGTH || !p.startsWith('/')) return false
+  // The length cap is checked by RootSchema (boundedString, UTF-16 units).
+  if (typeof p !== 'string' || !p.startsWith('/')) return false
   if (/[\p{Cc}\p{Cf}\\]/u.test(p) || !p.isWellFormed()) return false
   const trimmed = p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p
   if (trimmed === '/') return false
@@ -36,15 +40,22 @@ export function isValidSiteName(name) {
   return name !== '__proto__' && !(name in Object.prototype)
 }
 
-const RootSchema = z.string().refine(isValidRoot, {
-  message: 'must be an absolute path without ".", ".." or empty segments, control characters or backslashes, and not "/"'
+const RootSchema = boundedString({ max: MAX_ROOT_LENGTH }).refine(isValidRoot, {
+  error: 'must be an absolute path without ".", ".." or empty segments, control characters or backslashes, and not "/"'
 })
 
-// Issue messages are fixed text: they never contain the rejected value.
-const AllowSchema = z.object({
-  extensions: z.array(z.string(), { required_error: 'is required', invalid_type_error: 'must be an array of extensions' })
-    .min(1, 'at least one extension is required')
-    .max(MAX_ALLOW_ENTRIES, `at most ${MAX_ALLOW_ENTRIES} extensions are allowed`)
+// Issue messages are fixed text: they never contain the rejected value. As
+// for hostKeys below: zod 4 ignores required_error and invalid_type_error,
+// so an error function names the missing and wrong-type cases, and `when`
+// limits the length checks to arrays.
+const isArrayValue = payload => Array.isArray(payload.value)
+const typeError = (missing, wrongType) => issue =>
+  issue.code === 'invalid_type' ? (issue.input === undefined ? missing : wrongType) : undefined
+
+const AllowSchema = z.strictObject({
+  extensions: z.array(z.string(), { error: typeError('is required', 'must be an array of extensions') })
+    .min(1, { error: 'at least one extension is required', when: isArrayValue })
+    .max(MAX_ALLOW_ENTRIES, { error: `at most ${MAX_ALLOW_ENTRIES} extensions are allowed`, when: isArrayValue })
     .transform((list, ctx) => {
       const lower = list.map(e => e.toLowerCase())
       lower.forEach((ext, i) => {
@@ -54,9 +65,9 @@ const AllowSchema = z.object({
       })
       return [...new Set(lower)]
     }),
-  directories: z.array(z.string(), { required_error: 'is required', invalid_type_error: 'must be an array of directories' })
-    .min(1, 'at least one directory is required')
-    .max(MAX_ALLOW_ENTRIES, `at most ${MAX_ALLOW_ENTRIES} directories are allowed`)
+  directories: z.array(boundedString({ max: MAX_DIRECTORY_LENGTH }), { error: typeError('is required', 'must be an array of directories') })
+    .min(1, { error: 'at least one directory is required', when: isArrayValue })
+    .max(MAX_ALLOW_ENTRIES, { error: `at most ${MAX_ALLOW_ENTRIES} directories are allowed`, when: isArrayValue })
     .superRefine((list, ctx) => {
       list.forEach((dir, i) => {
         if (!isValidAllowedDirectory(dir)) {
@@ -64,7 +75,7 @@ const AllowSchema = z.object({
         }
       })
     })
-}, { required_error: 'is required: the extensions and directories read_file may serve', invalid_type_error: 'must be an object with extensions and directories' }).strict()
+}, { error: issue => issue.code === 'unrecognized_keys' ? 'unknown field' : typeError('is required: the extensions and directories read_file may serve', 'must be an object with extensions and directories')(issue) })
 
 const SiteSchema = z.object({
   wordpressRoot: RootSchema,
@@ -72,17 +83,32 @@ const SiteSchema = z.object({
   allow: AllowSchema
 })
 
-const SiteNameSchema = z.string().refine(isValidSiteName, {
-  message: 'site names must be host names (letters, digits, dots, hyphens, underscores) and not reserved names'
-})
+export const SITE_NAME_MESSAGE = 'site names must be host names (letters, digits, dots, hyphens, underscores) and not reserved names'
+const SiteNameSchema = boundedString({ min: 1, max: 253 }).refine(isValidSiteName, { error: SITE_NAME_MESSAGE })
+
+// zod 4's record drops a "__proto__" key before its key schema sees it, so
+// that one name is checked on the raw object (JSON.parse keeps it as an own
+// key). Every other name goes through SiteNameSchema.
+const SitesSchema = z.preprocess((raw, ctx) => {
+  if (raw !== null && typeof raw === 'object' && Object.hasOwn(raw, '__proto__')) {
+    ctx.addIssue({ code: 'custom', message: SITE_NAME_MESSAGE, path: ['__proto__'] })
+  }
+  return raw
+}, z.record(SiteNameSchema, SiteSchema))
 
 // Issue messages are fixed text: they never contain the rejected value.
+// zod 4 ignores the zod 3 required_error and invalid_type_error params, so
+// the error function names the two cases of the array type check (missing,
+// not an array). zod 4 also runs length checks on anything with a length,
+// such as a string that failed the array check; `when` limits them to arrays.
+const isArray = payload => Array.isArray(payload.value)
 const HostKeysSchema = z.array(z.string(), {
-  required_error: 'host-key pins are required (at least one SHA-256 fingerprint)',
-  invalid_type_error: 'must be an array of SHA-256 fingerprints'
+  error: issue => issue.input === undefined
+    ? 'host-key pins are required (at least one SHA-256 fingerprint)'
+    : 'must be an array of SHA-256 fingerprints'
 })
-  .min(1, 'at least one SHA-256 fingerprint is required')
-  .max(MAX_HOST_KEYS, `at most ${MAX_HOST_KEYS} fingerprints are allowed`)
+  .min(1, { error: 'at least one SHA-256 fingerprint is required', when: isArray })
+  .max(MAX_HOST_KEYS, { error: `at most ${MAX_HOST_KEYS} fingerprints are allowed`, when: isArray })
   .transform((keys, ctx) => {
     const normalised = keys.map(normaliseFingerprint)
     const seen = new Set()
@@ -99,14 +125,14 @@ const HostKeysSchema = z.array(z.string(), {
   })
 
 const ServerSchema = z.object({
-  id: z.string().min(1),
-  label: z.string().min(1),
-  host: z.string().min(1),
+  id: boundedString({ min: 1 }),
+  label: boundedString({ min: 1 }),
+  host: boundedString({ min: 1 }),
   port: z.number().int().min(1).max(65535),
-  user: z.string().min(1),
-  privateKeyPath: z.string().min(1),
+  user: boundedString({ min: 1 }),
+  privateKeyPath: boundedString({ min: 1 }),
   hostKeys: HostKeysSchema,
-  sites: z.record(SiteNameSchema, SiteSchema)
+  sites: SitesSchema
 })
 
 const RegistrySchema = z.object({
@@ -136,6 +162,10 @@ function serverLabel(raw, index) {
 /** @param {unknown} raw @param {z.ZodError} error */
 function describeIssues(raw, error) {
   return error.issues.map(issue => {
+    // zod 4 reports a refused record key as "Invalid key in record" with the
+    // key schema's issues nested; show the fixed site-name message instead.
+    const message = issue.code === 'invalid_key' ? SITE_NAME_MESSAGE : issue.message
+    issue = { ...issue, message }
     const [top, index, ...rest] = issue.path
     if (top === 'servers' && typeof index === 'number') {
       // A rejected site name is a value: show it only when it is a valid

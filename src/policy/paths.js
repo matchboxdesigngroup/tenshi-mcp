@@ -183,7 +183,8 @@ export function isAllowed(allow, relativePath) {
 export function isValidAllowedDirectory(dir) {
   if (dir === '.') return true
   const parts = relativeSegments(dir)
-  if (parts === null || dir.length > 512 || dir.includes('\\')) return false
+  // The length cap is checked by the registry schema (UTF-16 units).
+  if (parts === null || dir.includes('\\')) return false
   return parts.every(s => !isDeniedSegment(s, false))
 }
 
