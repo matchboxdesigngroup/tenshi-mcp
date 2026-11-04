@@ -13,12 +13,12 @@ export function lookupSite(site) {
   try {
     found = resolveServerForSite(site)
   } catch (err) {
-    throw new ToolError(ERROR_CODES.NOT_AVAILABLE, { cause: err })
+    throw new ToolError(ERROR_CODES.NOT_AVAILABLE, { cause: err, reason: 'unknown_site' })
   }
   const config = found?.site
   if (!config || typeof config.wordpressRoot !== 'string' || typeof config.logDir !== 'string' ||
       !config.allow || !Array.isArray(config.allow.extensions) || !Array.isArray(config.allow.directories)) {
-    throw new ToolError(ERROR_CODES.NOT_AVAILABLE)
+    throw new ToolError(ERROR_CODES.NOT_AVAILABLE, { reason: 'unknown_site' })
   }
   return {
     serverId: found.serverId,

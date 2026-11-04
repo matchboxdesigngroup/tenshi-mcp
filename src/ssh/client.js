@@ -53,9 +53,9 @@ function scheduleIdle(serverId, entry) {
  * Open and authenticate a new connection. Every call verifies the host key
  * afresh, so a reconnect after the pool dropped a connection is checked
  * like the first connection. A host key that matches no pin fails with the
- * fixed E_HOST_KEY error, which carries no fingerprint, host or path; the
- * mismatch is not logged (no log line may carry server details until the
- * audit log exists).
+ * fixed E_HOST_KEY error, which carries no fingerprint, host or path. The
+ * audit log records the refused call (code and reason only, no key, pin or
+ * host); nothing else logs it.
  */
 async function connect(server) {
   const ssh = new NodeSSH()
@@ -73,13 +73,13 @@ async function connect(server) {
     })
   } catch (err) {
     ssh.dispose()
-    if (hostKeyRejected) throw new ToolError(ERROR_CODES.HOST_KEY)
+    if (hostKeyRejected) throw new ToolError(ERROR_CODES.HOST_KEY, { reason: 'host_key' })
     throw err
   }
   if (hostKeyRejected) {
     // ssh2 disconnects on a rejected key; never use a connection that got here.
     ssh.dispose()
-    throw new ToolError(ERROR_CODES.HOST_KEY)
+    throw new ToolError(ERROR_CODES.HOST_KEY, { reason: 'host_key' })
   }
   return ssh
 }
@@ -139,7 +139,7 @@ export async function openSftpChannel(serverId) {
   try {
     getServerConfig(serverId)
   } catch (err) {
-    throw new ToolError(ERROR_CODES.NOT_AVAILABLE, { cause: err })
+    throw new ToolError(ERROR_CODES.NOT_AVAILABLE, { cause: err, reason: 'unknown_site' })
   }
   const ssh = await acquire(serverId)
   return ssh.requestSFTP()
