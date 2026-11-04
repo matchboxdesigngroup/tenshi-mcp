@@ -15,7 +15,7 @@ import { VECTORS } from './helpers/host-key-vectors.js'
 // only the public surfaces (the tool handlers, the server over stdio and
 // loadRegistry). The expected outcomes (accepted or refused, and where) are
 // the zod 3 outcomes. The SDK block also pins the refusal text of SDK 1.30.1
-// with zod 4, so that block alone does not run unchanged against zod 3.
+// (unchanged in 1.32.0) with zod 4, so that block alone does not run unchanged against zod 3.
 
 const ASTRAL = '\u{1F600}' // one code point, two UTF-16 units
 const HIGH = '\uD83D' // lone high surrogate, one unit
@@ -112,7 +112,7 @@ describe('the SDK counts listed string bounds in UTF-16 units', () => {
     ...maxCases(MAX_PATH_LENGTH).map(([label, p, ok]) => [`read_file path: ${label}`, 'read_file', { site: 'unknown.example', path: p }, ok, 'path', MAX_PATH_LENGTH])
   ]
 
-  // SDK 1.30.1 reports each issue as one line, "<zod message> at <dot path>"
+  // SDK 1.30.1 and 1.32.0 report each issue as one line, "<zod message> at <dot path>"
   // (1.29.0 printed the zod issues as a JSON array). The whole line is
   // pinned: exactly one issue, zod 4's too_big text for a string with this
   // bound, at this field.
