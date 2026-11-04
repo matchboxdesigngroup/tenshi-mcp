@@ -306,7 +306,7 @@ The tools read over SFTP only. The design follows the platform ADR on tool-layer
 - Hard links cannot be detected over SFTP v3 (the attributes carry no link count or inode). A hard link inside the root to a file elsewhere, also one put in place of a checked file with the same attributes, is served under its own name if that name passes the policy, with redaction applied.
 - Refusals are byte-identical, but not identical in cost: a refusal made before any connection (unknown site, lexical or policy refusal of the request) sends no request, and a refusal on the server takes a different number of SFTP round trips depending on where it is decided (for example, a path whose resolved target is outside the root or denied, compared with a missing one). Timing can therefore tell some refusal kinds apart; it does not reveal file contents or whether a file under a denied name exists, because such requests are refused before any connection. With the server unreachable, an unknown site still gets `E_NOT_AVAILABLE` and a known site `E_REMOTE`.
 - Redaction is heuristic: a secret in a format the rules do not recognise is returned.
-- The audit log is not recorded for a `tools/call` request that fails the SDK's own request schema, and records written to stderr are only as durable as the process reading them. See [Audit log](#audit-log).
+- The audit log does not record messages the transport cannot parse or requests cancelled before the dispatcher runs (no tool code runs for either), loses records in bursts beyond its queue bound (counted), and records on stderr are only as durable as the process reading them. See [Audit log](#audit-log).
 
 ---
 
@@ -367,13 +367,25 @@ Expected: two JSON responses, the second containing a `tools` array with `read_l
 
 ## Audit log
 
-`src/audit/log.js` and `src/audit/sink.js`: every `tools/call` request that reaches the server's tool dispatcher writes exactly one JSON record (one line). That includes refusals, failures, unknown tool names and arguments the MCP SDK refuses before a handler runs. `tools/list` and other requests write none. `src/server.js` wraps the SDK's `tools/call` dispatcher and refuses to build a server if that wrapper is not in place. Not recorded: a request that fails the SDK's own `tools/call` request schema, for example one without a tool `name`. The SDK answers it with a JSON-RPC error before the dispatcher runs.
+`src/audit/log.js` and `src/audit/sink.js`: every `tools/call` request the server answers writes exactly one JSON record (one line). That covers successful calls, refusals and failures. It also covers requests the MCP SDK refuses before any tool code runs: an unknown tool name, arguments that fail the tool's schema, a request without a `name` or with a name that is not a string, arguments that are not an object, and a request for task creation (`params.task`). `tools/list` and other methods write no record. Two hooks keep this exact. `src/server.js` wraps the SDK's `tools/call` dispatcher, and tool callbacks report counts to it. The transport passed to `connect` is wrapped as well, so a `tools/call` request answered without reaching the dispatcher is recorded when its answer is sent. `createServer` refuses to build a server without the dispatcher wrapper.
 
-**Where records go.** By default, stderr. If `TENSHI_MCP_AUDIT_LOG` is set (blank or whitespace only counts as unset), records go to that file instead. Never stdout, which carries the MCP protocol. The value must be an absolute path. The file is opened for appending, without following a symlink in the last path component and without blocking on a FIFO, and created with mode `0600`. It must be a regular file owned by the server's user with no group or other permission bits. If any of that fails, the server does not start. It prints one fixed line naming the variable (never its value) and exits with status 1: an audit log that was asked for but cannot be used does not silently fall back. Symlinks in parent directories are not checked. The server does not rotate or delete the file, so retention is up to the operator.
+Not recorded, and no tool code runs for any of these:
 
-**Writes never hold up a tool call.** Records are queued (at most 1024) and written one at a time with asynchronous `fs.write`, which runs the syscall off the event loop. A write refused with `EAGAIN` is retried after 20 ms. A record is dropped and counted in three cases: the queue is full (for example, a stderr reader that stopped draining), its write fails, or building it throws. The tool call goes on either way. This fail-open choice keeps the read-only tools available when a log sink is full or broken, and makes each loss visible: `auditDropped` in later records and a gap in `seq`. Write errors are never printed. On `SIGINT` or `SIGTERM` the server waits at most 1 second for queued records before it exits.
+- A message the transport cannot parse as JSON-RPC. The SDK sends no reply.
+- A request the client cancels before the dispatcher runs. The SDK sends no reply.
+- A request evicted from the tracking table when more than 4096 `tools/call` requests are waiting for an answer at once. It is counted in `auditDropped`.
 
-**Never in a record:** file or log content, path, filter, site or tool-name values sent by the caller (only their length and a keyed hash), unknown argument names, credentials, host names, ports, users, key paths, host-key pins or fingerprints, and remote error text. Every line is printable ASCII: characters outside `0x20`-`0x7e` are written as `\u` escapes, so a record cannot carry a line break or a terminal control sequence. A record is at most 2048 bytes. That is below the Linux pipe atomicity limit (4096), so a record written to a pipe is never interleaved with other writes. A record over the bound is replaced by its fixed fields plus `"oversize": true`. With the current fields and argument caps this does not happen.
+**Where records go.** By default, stderr. If `TENSHI_MCP_AUDIT_LOG` is set (blank or whitespace only counts as unset), records go to that file instead. Never stdout, which carries the MCP protocol. The value must be an absolute path. The file is opened for appending, without following a symlink in the last path component and without blocking on a FIFO, and created with mode `0600`. It must be a regular file with exactly one link (a hard link is refused), owned by the server's user, with no group or other permission bits. Its directory must be owned by the server's user or root and not writable by group or others, unless it has the sticky bit. Only the immediate parent is checked, and symlinks in parent directories are followed. If any check fails, the server does not start. It prints one fixed line naming the variable (never its value) and exits with status 1: an audit log that was asked for but cannot be used does not silently fall back. The server does not rotate or delete the file, so retention is up to the operator.
+
+**Use a file in deployment.** A record is at most 2048 bytes; with the current fields it is about 600 bytes. Linux writes up to 4096 bytes (PIPE_BUF) to a pipe atomically, so on stderr a record is never interleaved with other writes there. On macOS PIPE_BUF is 512 bytes, so on a macOS pipe a record can be split by another write to the same stderr. A file opened for appending has neither limit, and the file sink writes larger batches. For Tenshi this means three things:
+
+- Its MCP child environment must allow `TENSHI_MCP_AUDIT_LOG` and pass an absolute path to a file that meets the checks above.
+- It should pass the job id in each `tools/call` as `params._meta["tenshi/jobId"]`, matching `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`.
+- If it reads records from stderr instead, it must not cut them; a shortened line is not valid JSON.
+
+**Writes never hold up a tool call.** Records are queued (at most 4096 records, so at most 8 MiB) and written with asynchronous `fs.write`, which runs the syscall off the event loop. Each write carries as many whole queued records as fit: up to 64 KiB for a regular file, and up to 4096 bytes for a pipe or terminal, which keeps the Linux atomicity above. A write refused with `EAGAIN` is retried after 20 ms. A record is dropped and counted in three cases: the queue is full (a burst of more than 4096 calls before the writes catch up, or a stderr reader that stopped draining), its write fails, or building it throws. The tool call goes on either way. This fail-open choice keeps the read-only tools available when a log sink is full or broken, and makes each loss visible: `auditDropped` in later records and a gap in `seq`. A loss at the very end of a run shows only as a last `seq` below the number of calls. Write errors are never printed. On `SIGINT` or `SIGTERM` the server waits at most 1 second for queued records before it exits. In a local run over stdio, a burst of 5000 pipelined calls lost no records with the file sink; with stderr as a pipe, 4000 lost none and 5000 lost some, shown by `auditDropped` and `seq`.
+
+**Never in a record:** file or log content, path, filter, site or tool-name values sent by the caller (only their length and a keyed hash), unknown argument names, credentials, host names, ports, users, key paths, host-key pins or fingerprints, and remote error text. Every line is printable ASCII: characters outside `0x20`-`0x7e` are written as `\u` escapes, so a record cannot carry a line break or a terminal control sequence. A record over 2048 bytes is replaced by its fixed fields plus `"oversize": true`. With the current fields and argument caps this does not happen.
 
 **Hashes** are HMAC-SHA-256 keyed with a random per-process secret that is never written out, truncated to 16 hex characters. A recorded hash therefore cannot be reversed by hashing guessed paths or addresses. The cost: hashes are comparable only between records with the same `instance`, that is, from one server process.
 
@@ -391,15 +403,15 @@ This list is the contract for consumers (the Tenshi side consumes it through mat
 | `jobId` | string or null | The caller's job id from the request `_meta` key `tenshi/jobId`, if it matches `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`; otherwise null. |
 | `jobIdInvalid` | boolean | True when `tenshi/jobId` was present but not recorded (wrong type or pattern). |
 | `tool` | string or null | `read_log` or `read_file`; null for an unknown tool name. |
-| `toolName` | object | Only when `tool` is null: `{ type, length, hash }` of the name sent. |
+| `toolName` | object | Only when `tool` is null: `{ type, length, hash }` of the name sent, or `{ type }` when it is not a string (`undefined` when absent). |
 | `site` | string or null | The site id from the registry when the `site` argument names a registered site, else null. Never a host. |
 | `server` | string or null | The registry server id for that site, else null. |
 | `request` | object | Argument shapes, see below. |
 | `outcome` | string | `ok`, `refused` (this server or the SDK refused the call), `not_available` (the SFTP server reported the path missing or not permitted) or `error` (timeout, remote or internal failure). |
-| `code` | string or null | The error code returned to the caller (`E_NOT_AVAILABLE`, `E_INVALID_INPUT`, `E_HOST_KEY`, `E_TIMEOUT`, `E_REMOTE`, `E_INTERNAL`); null when `ok`. SDK argument refusals and unknown tools are recorded as `E_INVALID_INPUT`, although the SDK's own message is what the caller sees. |
+| `code` | string or null | The error code returned to the caller (`E_NOT_AVAILABLE`, `E_INVALID_INPUT`, `E_HOST_KEY`, `E_TIMEOUT`, `E_REMOTE`, `E_INTERNAL`); null when `ok`. Every SDK refusal (unknown tool, schema, malformed request, task creation) is recorded as `E_INVALID_INPUT`, although the SDK's own message or JSON-RPC error is what the caller sees. |
 | `reason` | string or null | Audit-only refusal or failure kind, see below; null when `ok`. |
 | `durationMs` | number | Wall time of the call in whole milliseconds. |
-| `bytesReturned` | number | UTF-8 bytes of all text content returned to the caller, error text included. |
+| `bytesReturned` | number | UTF-8 bytes of all text content returned to the caller, error text included; for a JSON-RPC error answer, the bytes of its message. |
 | `redactedLines` | number or null | Lines replaced by the redaction marker in the returned content; null unless `ok`. |
 | `truncated` | boolean or null | A cap shortened the result. For `read_file`: the file is longer than what was returned. For `read_log`: the log is longer than the 256 KB window, a line was cut, or lines were dropped for the byte cap. Null unless `ok`. |
 | `returnedLines` | number or null | `read_log` only: lines returned; null otherwise and unless `ok`. |
@@ -412,7 +424,7 @@ This list is the contract for consumers (the Tenshi side consumes it through mat
 
 | `reason` | `outcome` | Meaning |
 |---|---|---|
-| `invalid_input` | refused | Arguments failed the SDK schema or the handler's own validation. |
+| `invalid_input` | refused | Arguments failed the SDK schema or the handler's own validation, or the SDK refused the request itself (no or non-string `name`, non-object `arguments`, task creation). |
 | `unknown_tool` | refused | No tool of that name. |
 | `unknown_site` | refused | The site is not in the registry. |
 | `path_syntax` | refused | Control, format or look-alike characters, backslash, percent sign, empty or overlong path. |
@@ -441,7 +453,7 @@ Example (one line in the log, wrapped here):
  "redactedLines":null,"truncated":null,"returnedLines":null,"auditDropped":0}
 ```
 
-**Job id.** MCP lets a client put metadata in a request's `params._meta`. A caller passes its job id as `_meta: { "tenshi/jobId": "<id>" }` in `tools/call`. The id is recorded only; it changes nothing else.
+**Job id.** MCP lets a client put metadata in a request's `params._meta`. A caller passes its job id as `_meta: { "tenshi/jobId": "<id>" }` in `tools/call`, matching `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`. The id is recorded only; it changes nothing else.
 
 ---
 
@@ -452,7 +464,7 @@ src/
   index.js              MCP entry point: loads the registry, opens the audit sink, starts stdio transport
   server.js             MCP server: registers tools, wraps tools/call with the audit log
   audit/log.js          Audit records: one per tools/call, shapes and keyed hashes, never content
-  audit/sink.js         Audit sink: stderr or TENSHI_MCP_AUDIT_LOG file, bounded non-blocking queue
+  audit/sink.js         Audit sink: stderr or TENSHI_MCP_AUDIT_LOG file, bounded batched non-blocking queue
   config/servers.js     Load + validate servers.json (Zod), lookup functions
   errors.js             Fixed error codes returned to the model
   ssh/client.js         Connection pool keyed by server ID, 5-min idle timeout, SFTP channels only

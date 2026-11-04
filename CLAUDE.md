@@ -45,7 +45,7 @@ src/
   index.js              MCP entry point: registry, audit sink, stdio transport
   server.js             MCP server: registers tools, wraps tools/call with the audit log
   audit/log.js          Audit records: one per tools/call, shapes and keyed hashes, never content
-  audit/sink.js         Audit sink: stderr or TENSHI_MCP_AUDIT_LOG file, bounded non-blocking queue
+  audit/sink.js         Audit sink: stderr or TENSHI_MCP_AUDIT_LOG file, bounded batched non-blocking queue
   config/servers.js     Load + validate servers.json (Zod), lookup functions
   errors.js             Fixed error codes returned to the model
   ssh/client.js         Connection pool keyed by server ID, 5-min idle timeout, SFTP channels only
@@ -106,9 +106,9 @@ Details in the README security model; the design follows the platform ADR on too
 6. **Redaction** — `src/policy/redact.js` replaces credential lines in all returned content. Lines are classified on their whole text before any filter, selection or cut (`read_file` reads a look-ahead past `maxBytes`; `read_log` classifies the partial first line of the window before dropping it), so the caller's cut never changes what is redacted; a redacted line is never returned in part. Keep every rule linear in the line length. Tools return only `redactedLines`.
 7. **Limits** — `read_log`: 500 lines, 51200 bytes, last 256 KB of the log, lines cut at 2000 characters, filter is a literal case-insensitive substring. `read_file`: 51200 bytes. 10-second deadline per call; on expiry the SFTP channel is closed.
 8. **Errors** — fixed codes from `src/errors.js` (`E_HOST_KEY` included); never echo arguments, server paths or remote error text. A `ToolError` may carry an audit-only `reason` (non-enumerable, from `REASONS`); never put it in tool output.
-9. **Audit log** — `src/audit/`: one record per `tools/call` (README "Audit log" lists the fields; that list is the contract for the Tenshi side). Records go to stderr or the `TENSHI_MCP_AUDIT_LOG` file, never stdout. Never add content, caller strings (only length and keyed hash), credentials, hosts, users, key paths or pins to a record; every new tool needs an entry in `AUDITED_TOOLS` (`src/server.js`) and must call `audit.report`. Writes stay asynchronous and bounded; a sink failure must never fail or delay a tool call.
+9. **Audit log** — `src/audit/`: one record per `tools/call` the server answers, including SDK refusals; connect only through `createServer(...).connect`, which wraps the transport (README "Audit log" lists the fields; that list is the contract for the Tenshi side). Records go to stderr or the `TENSHI_MCP_AUDIT_LOG` file, never stdout. Never add content, caller strings (only length and keyed hash), credentials, hosts, users, key paths or pins to a record; every new tool needs an entry in `AUDITED_TOOLS` (`src/server.js`) and must call `audit.report`. Writes stay asynchronous and bounded; a sink failure must never fail or delay a tool call.
 
-Not covered yet (tracked privately): a swap that keeps type, mode and owner and is undone before the second realpath (SFTP v3 cannot bind a handle to a path), hard links (undetectable over SFTP v3), refusal kinds that differ in SFTP round trips (byte-identical output, different timing), `tools/call` requests that fail the SDK's request schema (not audited). Server-side confinement is the backstop.
+Not covered yet (tracked privately): a swap that keeps type, mode and owner and is undone before the second realpath (SFTP v3 cannot bind a handle to a path), hard links (undetectable over SFTP v3), refusal kinds that differ in SFTP round trips (byte-identical output, different timing), audit records lost in bursts beyond the queue bound (counted) and for requests cancelled before dispatch (no tool code runs). Server-side confinement is the backstop.
 
 ## MCP registration
 
