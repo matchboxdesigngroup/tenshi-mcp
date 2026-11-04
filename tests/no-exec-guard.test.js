@@ -1,8 +1,13 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'fs'
+import { spawnSync } from 'child_process'
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, copyFileSync } from 'fs'
+import { createRequire } from 'module'
 import { tmpdir } from 'os'
-import { join } from 'path'
-import { checkSource, checkTree, EXEMPTIONS, SRC_DIR } from '../scripts/no-exec-guard.mjs'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
+import { checkSource, checkTree, EXEMPTIONS, SRC_DIR, PARSER_AVAILABLE } from '../scripts/no-exec-guard.mjs'
+
+const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'no-exec-guard.mjs')
 
 // Static never-exec guard (tenshi#20): the real src/ passes with no
 // exemptions, and every forbidden pattern below, including aliasing and
@@ -11,6 +16,7 @@ import { checkSource, checkTree, EXEMPTIONS, SRC_DIR } from '../scripts/no-exec-
 
 const TOOL = 'src/tools/example.js'
 const CLIENT = 'src/ssh/client.js'
+const SFTP = 'src/ssh/sftp.js'
 
 function rules(code, file = TOOL) {
   return checkSource(code, { file }).map(f => `${f.rule}:${f.name}`)
@@ -24,6 +30,10 @@ describe('never-exec guard on src/', () => {
     expect(files).toContain('src/tools/read-log.js')
     expect(files).toContain('src/ssh/client.js')
     expect(files).toContain('src/ssh/sftp.js')
+  })
+
+  it('has its parser installed as a dependency of this repository', () => {
+    expect(PARSER_AVAILABLE).toBe(true)
   })
 
   it('ships with no exemptions', () => {
@@ -111,10 +121,64 @@ const FORBIDDEN = [
   ["ssh.exec('ls')", TOOL, 'name:exec'],
   // Files that hold SSH objects: no runtime-built names, no reflection.
   ["const k = 'exe' + 'cCommand'; ssh[k]('ls')", CLIENT, 'ssh-computed:computed'],
-  ["const proto = Object.getPrototypeOf(ssh)", CLIENT, 'ssh-computed:getPrototypeOf'],
-  ["Object.getOwnPropertyDescriptor(Object.getPrototypeOf(c), k).value", 'src/ssh/sftp.js', 'ssh-computed:getOwnPropertyDescriptor'],
-  ["const P = NodeSSH.prototype", CLIENT, 'ssh-computed:prototype'],
-  ["ssh['__proto__']", CLIENT, 'ssh-computed:__proto__'],
+  ["const proto = Object.getPrototypeOf(ssh)", CLIENT, 'reflection:getPrototypeOf'],
+  ["Object.getOwnPropertyDescriptor(Object.getPrototypeOf(c), k).value", SFTP, 'reflection:getOwnPropertyDescriptor'],
+  ["const P = NodeSSH.prototype", CLIENT, 'reflection:prototype'],
+  ["ssh['__proto__']", CLIENT, 'reflection:__proto__'],
+  // Computed keys in every binding and literal form, in both SSH files.
+  ["const { [k]: run } = ssh", CLIENT, 'ssh-computed:computed'],
+  ["const { [k]: run } = channel", SFTP, 'ssh-computed:computed'],
+  ["function f({ [k]: run }) { return run }", CLIENT, 'ssh-computed:computed'],
+  ["const f = ({ a: { [k]: run } }) => run", SFTP, 'ssh-computed:computed'],
+  ["let run; ({ [k]: run } = ssh)", CLIENT, 'ssh-computed:computed'],
+  ["for (const { [k]: run } of [ssh]) run()", CLIENT, 'ssh-computed:computed'],
+  ["try { f() } catch ({ [k]: run }) { run() }", CLIENT, 'ssh-computed:computed'],
+  ["const [{ [k]: run } = ssh] = []", SFTP, 'ssh-computed:computed'],
+  ["const o = { [k]: 1 }", SFTP, 'ssh-computed:computed'],
+  ["class A { [k]() {} }", CLIENT, 'ssh-computed:computed'],
+  ["class A { static [k] = 1 }", CLIENT, 'ssh-computed:computed'],
+  ["ssh?.[k]?.()", CLIENT, 'ssh-computed:computed'],
+  // SSH files import exactly their pinned modules and names and re-export nothing.
+  ["import { pick } from '../errors.js'", CLIENT, 'ssh-import:../errors.js:pick'],
+  ["import { pick } from '../policy/paths.js'", CLIENT, 'ssh-import:../policy/paths.js'],
+  ["import * as client from './client.js'", SFTP, 'ssh-import:./client.js:*'],
+  ["import { closeAll } from './client.js'", SFTP, 'ssh-import:./client.js:closeAll'],
+  ["export { openSftpChannel } from './client.js'", SFTP, 'ssh-import:./client.js'],
+  ["export * from 'node-ssh'", CLIENT, 'ssh-import:node-ssh'],
+  ["import { Client } from 'ssh2'", CLIENT, 'ssh-import:ssh2'],
+  // Reflection anywhere in src/, not only in the SSH files.
+  ["Object.getPrototypeOf(() => {})", TOOL, 'reflection:getPrototypeOf'],
+  ["Object.getOwnPropertyDescriptors(f)", TOOL, 'reflection:getOwnPropertyDescriptors'],
+  ["Object.getOwnPropertyNames(f)", TOOL, 'reflection:getOwnPropertyNames'],
+  ["Object.getOwnPropertySymbols(f)", TOOL, 'reflection:getOwnPropertySymbols'],
+  ["Object.setPrototypeOf(a, b)", TOOL, 'reflection:setPrototypeOf'],
+  ["const p = f.__proto__", TOOL, 'reflection:__proto__'],
+  ["const p = f['__proto__']", TOOL, 'reflection:__proto__'],
+  ["const p = f[`__proto__`]", TOOL, 'reflection:__proto__'],
+  ["const o = { '__proto__': f }", TOOL, 'reflection:__proto__'],
+  ["const p = Object.prototype", TOOL, 'reflection:prototype'],
+  ["const { prototype } = f", TOOL, 'reflection:prototype'],
+  ["f.__lookupGetter__('x')", TOOL, 'reflection:__lookupGetter__'],
+  ["f.__defineGetter__('x', g)", TOOL, 'reflection:__defineGetter__'],
+  // Port forwarding, global requests and node-ssh methods with an exec mode.
+  ["ssh.forwardOut('127.0.0.1', 0, 'example.com', 80)", CLIENT, 'name:forwardOut'],
+  ["ssh.connection.forwardIn('127.0.0.1', 0, cb)", CLIENT, 'name:forwardIn'],
+  ["ssh.connection.unforwardIn('127.0.0.1', 0, cb)", CLIENT, 'name:unforwardIn'],
+  ["ssh.forwardInStreamLocal('/tmp/s', cb)", CLIENT, 'name:forwardInStreamLocal'],
+  ["ssh.forwardOutStreamLocal('/tmp/s')", CLIENT, 'name:forwardOutStreamLocal'],
+  ["ssh.connection.openssh_forwardOutStreamLocal('/tmp/s', cb)", CLIENT, 'name:openssh_forwardOutStreamLocal'],
+  ["ssh.connection.openssh_noMoreSessions(cb)", CLIENT, 'name:openssh_noMoreSessions'],
+  ["ssh.mkdir('/x', mode)", CLIENT, 'name:mkdir'],
+  ["ssh.putFile('a', 'b')", CLIENT, 'name:putFile'],
+  ["ssh.getDirectory('a', 'b')", CLIENT, 'name:getDirectory'],
+  // fs only where it is needed; network clients that need no import.
+  ["import fs from 'fs'", TOOL, 'import:fs'],
+  ["import { writeFileSync } from 'node:fs'", 'src/ssh/confine.js', 'import:node:fs'],
+  ["import { readFileSync } from 'fs'", CLIENT, 'import:fs'],
+  ["await fetch('https://example.com')", TOOL, 'name:fetch'],
+  ["new WebSocket('wss://example.com')", TOOL, 'name:WebSocket'],
+  ["new XMLHttpRequest()", TOOL, 'name:XMLHttpRequest'],
+  ["new EventSource('https://example.com')", TOOL, 'name:EventSource'],
   // Unparseable code fails closed.
   ['const = ;', TOOL, 'file:parse'],
   ['with (x) { y() }', TOOL, 'file:parse']
@@ -136,7 +200,11 @@ const ALLOWED = [
   ["import { z } from 'zod'; import path from 'node:path'", TOOL],
   ["import { NodeSSH } from 'node-ssh'; const s = new NodeSSH(); s.requestSFTP()", CLIENT],
   ["const message = 'no exec here'; const t = `shell ${x}`", TOOL],
-  ["/** @returns {import('ssh2').Stats} */ function f() {}", TOOL]
+  ["/** @returns {import('ssh2').Stats} */ function f() {}", TOOL],
+  ["import { readFileSync } from 'fs'", 'src/config/servers.js'],
+  ["import fs from 'node:fs'", 'src/audit/sink.js'],
+  ["const ok = name !== '__proto__' && !(name in {}) && !Object.hasOwn(raw, '__proto__')", TOOL],
+  ["import { openSftpChannel } from './client.js'", SFTP]
 ]
 
 describe('never-exec guard: allowed patterns', () => {
@@ -195,5 +263,56 @@ describe('never-exec guard: tree checks fail closed', () => {
       .toEqual(['name:forbidden name in identifier', 'exemption:unused exemption'])
     expect(checkTree(src, { exemptions: [{ ...exemption, reason: '' }] }).findings.map(f => f.detail))
       .toEqual(['exemption without reason or issue'])
+  })
+})
+
+describe('never-exec guard: command line exit codes', () => {
+  let dir
+  afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); dir = undefined })
+
+  const run = (args, script = SCRIPT) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8' })
+
+  it('exits 0 on the real src/', () => {
+    const r = run([])
+    expect(r.status).toBe(0)
+    expect(r.stdout).toMatch(/^Never-exec guard passed: \d+ file\(s\) under src\/, no findings\.\n$/)
+  })
+
+  it('exits 1 on a finding and names it', () => {
+    dir = mkdtempSync(join(tmpdir(), 'tenshi-mcp-guard-'))
+    mkdirSync(join(dir, 'src'))
+    writeFileSync(join(dir, 'src', 'a.js'), "x.execCommand('ls')\n")
+    const r = run([join(dir, 'src')])
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('src/a.js:1 [name] execCommand')
+    expect(r.stderr).toContain('Never-exec guard failed: 1 finding(s) in 1 file(s).')
+  })
+
+  it('checks when invoked through a symlink', () => {
+    dir = mkdtempSync(join(tmpdir(), 'tenshi-mcp-guard-'))
+    mkdirSync(join(dir, 'src'))
+    writeFileSync(join(dir, 'src', 'a.js'), "x.execCommand('ls')\n")
+    const link = join(dir, 'guard-link.mjs')
+    symlinkSync(SCRIPT, link)
+    expect(run([join(dir, 'src')], link).status).toBe(1)
+  })
+
+  it('exits 2 on bad arguments and on a missing directory', () => {
+    expect(run(['a', 'b']).status).toBe(2)
+    expect(run(['--fix']).status).toBe(2)
+    const missing = run([join(tmpdir(), 'tenshi-mcp-guard-does-not-exist')])
+    expect(missing.status).toBe(2)
+    expect(missing.stderr).toMatch(/^Never-exec guard error: /)
+  })
+
+  it('exits 2 when the parser is not installed', () => {
+    // A copy of the script outside the repository cannot resolve acorn.
+    dir = mkdtempSync(join(tmpdir(), 'tenshi-mcp-guard-'))
+    const copy = join(dir, 'no-exec-guard.mjs')
+    copyFileSync(SCRIPT, copy)
+    expect(() => createRequire(copy).resolve('acorn')).toThrow()
+    const r = run([SRC_DIR], copy)
+    expect(r.status).toBe(2)
+    expect(r.stderr).toContain('parser not available')
   })
 })

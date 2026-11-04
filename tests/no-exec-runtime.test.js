@@ -6,7 +6,9 @@ import { createRequire, syncBuiltinESMExports } from 'node:module'
 // in scripts/no-exec-guard.mjs. Before any src/ or SSH library module is
 // loaded, every child_process function that starts a process is replaced by a
 // recording stub that throws, and so is every ssh2 Client and node-ssh method
-// that runs a remote command, opens a shell or requests a subsystem. Then
+// that runs a remote command, opens a shell, requests a subsystem, forwards a
+// port or socket, or transfers files (node-ssh's mkdir runs a remote command
+// when asked to). Then
 // read_file and read_log run against the in-process SFTP fake, on success and
 // refusal paths. Positive controls check that the SFTP methods on the same
 // prototypes were called, so the stubs are known to sit on the live path.
@@ -16,8 +18,11 @@ const require = createRequire(import.meta.url)
 const ssh2Path = createRequire(require.resolve('node-ssh')).resolve('ssh2')
 
 const PROCESS_FUNCTIONS = ['exec', 'execSync', 'execFile', 'execFileSync', 'spawn', 'spawnSync', 'fork']
-const CLIENT_FORBIDDEN = ['exec', 'shell', 'subsys']
-const NODE_SSH_FORBIDDEN = ['exec', 'execCommand', 'requestShell', 'withShell']
+const NODE_SSH_FORBIDDEN = [
+  'exec', 'execCommand', 'requestShell', 'withShell',
+  'mkdir', 'getFile', 'putFile', 'putFiles', 'putDirectory', 'getDirectory',
+  'forwardIn', 'forwardOut', 'forwardInStreamLocal', 'forwardOutStreamLocal'
+]
 
 const calls = []
 function forbidden(label) {
@@ -36,6 +41,12 @@ for (const name of PROCESS_FUNCTIONS) vi.spyOn(childProcess, name).mockImplement
 syncBuiltinESMExports()
 
 const { Client } = require(ssh2Path)
+// ssh2's command, shell, subsystem and forwarding requests; every openssh_*
+// method is a global request or a forwarding channel.
+const CLIENT_FORBIDDEN = [
+  'exec', 'shell', 'subsys', 'forwardIn', 'unforwardIn', 'forwardOut',
+  ...Object.getOwnPropertyNames(Client.prototype).filter(n => n.startsWith('openssh_'))
+]
 // node-ssh ships separate CommonJS and ES module builds; src/ssh/client.js
 // imports the ES module build, so the stubs go on that one.
 const { NodeSSH } = await import('node-ssh')
@@ -83,6 +94,11 @@ const settle = promise => promise.then(value => ({ value }), error => ({ error }
 describe('read_file and read_log never start a process or a remote command', () => {
   it('installed the stubs before the SSH libraries were loaded', () => {
     expect(loadedBeforeStubs).toEqual([])
+    // Every stubbed name exists in the installed versions, so a renamed
+    // method cannot leave a gap unnoticed.
+    expect(CLIENT_FORBIDDEN.filter(n => n.startsWith('openssh_')).length).toBeGreaterThan(0)
+    for (const name of CLIENT_FORBIDDEN) expect(vi.isMockFunction(Client.prototype[name]), name).toBe(true)
+    for (const name of NODE_SSH_FORBIDDEN) expect(vi.isMockFunction(NodeSSH.prototype[name]), name).toBe(true)
     expect(childProcess.spawn).not.toBe(undefined)
     expect(vi.isMockFunction(childProcess.spawn)).toBe(true)
   })

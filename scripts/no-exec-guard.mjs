@@ -2,12 +2,13 @@
 // Never-exec guard (tenshi#20). Run by CI (`node scripts/no-exec-guard.mjs`)
 // and by `npm test` (tests/no-exec-guard.test.js).
 //
-// The server must never start a remote command or a local process: tools read
-// over SFTP only. This script parses every file under src/ with acorn (already
-// in the dependency tree through vitest; no new dependency) and fails when the
-// code could reach a process or remote-command API, load a module dynamically,
-// or generate code from a string. It is a regression guard for changes to this
-// repository, not a sandbox for code that is already running in the process.
+// The server must never start a remote command, a port forward or a local
+// process: tools read over SFTP only. This script parses every file under
+// src/ with acorn (an exact dev dependency) and fails when the code could
+// reach a process, remote-command or forwarding API, load a module
+// dynamically, open a network client, or generate code from a string. It is a
+// regression guard for changes to this repository, not a sandbox for code that
+// is already running in the process.
 //
 // Rules (rule id in brackets):
 //   [file]      Every entry under src/ must be a directory or a regular .js
@@ -15,95 +16,143 @@
 //               ES module. Anything else fails, so nothing is left unscanned.
 //   [import]    Static imports and `export ... from` may name only a relative
 //               .js file inside src/ that exists, or a module in
-//               ALLOWED_IMPORTS. `node-ssh` only from SSH_LIBRARY_FILES. Any
-//               other module (child_process, vm, worker_threads, module,
-//               process, a new package that wraps them, ...) fails.
+//               ALLOWED_IMPORTS, from a file that module lists (`fs` only in
+//               the registry loader and the audit sink, `node-ssh` only in
+//               src/ssh/client.js). Any other module (child_process, vm,
+//               worker_threads, module, process, net, a new package, ...)
+//               fails.
 //   [dynamic-import]  Every `import()` expression fails.
-//   [name]      FORBIDDEN_NAMES, used anywhere as an identifier, property
-//               name, object key, import or export name, or as an exact
-//               string or template value (catches `x.exec`, `x['exec']`,
-//               `{ exec: run } = x`, `mkdir(p, 'exec')`, `eval`, `Function`,
-//               `.constructor`, `require`, `globalThis`, ...).
+//   [name]      FORBIDDEN_NAMES (and names starting with a FORBIDDEN_PREFIXES
+//               entry), used anywhere as an identifier, property name, object
+//               key, import or export name, or as an exact string or template
+//               value (catches `x.exec`, `x['exec']`, `{ exec: run } = x`,
+//               `mkdir(p, 'exec')`, `forwardOut`, `eval`, `Function`,
+//               `.constructor`, `require`, `globalThis`, `fetch`, ...).
 //               Two exact exceptions: a class `constructor() {}` method, and
 //               a direct call `R.exec(...)` where R is provably a RegExp: a
 //               regex literal, or a name bound exactly once in the file, by
 //               `const NAME = /.../` or `const NAME = new RegExp(...)`, in a
 //               file that does not rebind `RegExp`.
+//   [reflection]  REFLECTION_NAMES (prototype-chain and property-descriptor
+//               access) anywhere under src/: as identifiers, property names,
+//               import or export names, and as strings or templates used as
+//               a property key (`x['__proto__']`, `{ ['prototype']: v }`).
+//               Elsewhere such a string cannot read a property by itself
+//               (src/config/servers.js compares and has-checks '__proto__' to
+//               refuse it as a site name).
 //   [process]   `process` may appear only as `process.<name>` with a plain
 //               (non-computed) name from PROCESS_MEMBERS, so neither
 //               `process[x]` nor an alias of `process` can reach a module
 //               loader or a native binding.
 //   [ssh-computed]  In SSH_OBJECT_FILES (the files that hold the SSH
-//               connection or the raw SFTP channel), member access with a
-//               computed key that is not a literal fails, and so do the
-//               reflection names in SSH_REFLECTION_NAMES, so a method name
-//               built at runtime cannot be looked up on those objects.
+//               connection or the raw SFTP channel), every computed key that
+//               is not a literal fails: member access, destructuring in every
+//               binding form, object literals and class members.
+//   [ssh-import]  SSH_OBJECT_FILES may import exactly the modules and names
+//               in SSH_FILE_IMPORTS and re-export nothing, so an SSH object
+//               cannot be handed to a new helper in another file.
 //
-// Residuals (not caught; see the README "Never-exec guard"): a property name
-// built at runtime and looked up with a computed key in a file outside
-// SSH_OBJECT_FILES, on an object that has a dangerous method (no such object
-// is reachable there: tools get only the frozen SFTP facade, and the
-// constructors of functions are reachable only through such a lookup); code in
-// an allowed dependency; and anything that does not go through src/.
+// Residuals (not caught; README "Never-exec guard"): outside SSH_OBJECT_FILES
+// a property name assembled at runtime and used as a computed key can reach
+// any property of any object in scope, including the constructor of
+// functions and so code generation; the guard does not prove the absence of
+// such deliberately obfuscated code, review does. Also not seen: SSH objects
+// passed to the functions SSH_OBJECT_FILES already import, code in allowed
+// dependencies, and anything outside src/.
 //
 // EXEMPTIONS is empty and must stay empty unless a reviewed change adds an
 // entry with a reason and a tracking issue; an unused exemption fails.
 //
 // Usage: node scripts/no-exec-guard.mjs [srcDir]
-// Exit codes: 0 pass; 1 findings; 2 usage or internal error.
+// Exit codes: 0 pass; 1 findings; 2 usage error, missing parser or internal
+// error.
 
-import { parse } from 'acorn';
-import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// Loaded here, not with a static import, so a missing parser is exit 2 with
+// a message instead of a module-resolution crash.
+let acorn = null;
+try {
+  acorn = await import('acorn');
+} catch {
+  acorn = null;
+}
+export const PARSER_AVAILABLE = acorn !== null;
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const SRC_DIR = path.join(ROOT, 'src');
 
-/** Bare module specifiers src/ may import. Exact match only. */
-export const ALLOWED_IMPORTS = Object.freeze([
-  'crypto', 'node:crypto',
-  'fs', 'node:fs',
-  'os', 'node:os',
-  'path', 'node:path',
-  'zod',
-  '@modelcontextprotocol/sdk/server/mcp.js',
-  '@modelcontextprotocol/sdk/server/stdio.js',
-  '@modelcontextprotocol/sdk/types.js',
-  'node-ssh',
-]);
+const ANY = '*';
+const FS_FILES = Object.freeze(['src/config/servers.js', 'src/audit/sink.js']);
 
-/** Files (relative to the repo root) that may import the SSH library. */
-export const SSH_LIBRARY_FILES = Object.freeze(['src/ssh/client.js']);
-/** Modules only SSH_LIBRARY_FILES may import. */
-export const SSH_LIBRARY_MODULES = Object.freeze(['node-ssh']);
+/** Bare module specifiers src/ may import (exact match), and which files may import each. */
+export const ALLOWED_IMPORTS = Object.freeze({
+  'crypto': ANY, 'node:crypto': ANY,
+  'os': ANY, 'node:os': ANY,
+  'path': ANY, 'node:path': ANY,
+  'fs': FS_FILES, 'node:fs': FS_FILES,
+  'zod': ANY,
+  '@modelcontextprotocol/sdk/server/mcp.js': ANY,
+  '@modelcontextprotocol/sdk/server/stdio.js': ANY,
+  '@modelcontextprotocol/sdk/types.js': ANY,
+  'node-ssh': Object.freeze(['src/ssh/client.js']),
+});
 
 /** Files that hold the SSH connection or the raw SFTP channel. */
 export const SSH_OBJECT_FILES = Object.freeze(['src/ssh/client.js', 'src/ssh/sftp.js']);
 
+/** Exactly what each SSH file may import: specifier -> imported names. */
+export const SSH_FILE_IMPORTS = Object.freeze({
+  'src/ssh/client.js': Object.freeze({
+    'node-ssh': ['NodeSSH'],
+    'os': ['homedir'],
+    '../config/servers.js': ['getServerConfig'],
+    '../errors.js': ['ERROR_CODES', 'ToolError'],
+    './host-key.js': ['createHostVerifier'],
+  }),
+  'src/ssh/sftp.js': Object.freeze({
+    './client.js': ['openSftpChannel'],
+    '../errors.js': ['ERROR_CODES', 'ToolError', 'toToolError'],
+  }),
+});
+
 export const FORBIDDEN_NAMES = Object.freeze([
-  // Local processes (child_process, cluster) and remote commands (node-ssh,
-  // ssh2). `subsys` is ssh2's generic subsystem request; SFTP goes through
-  // node-ssh's requestSFTP, which does not use it.
+  // Local processes (child_process, cluster).
   'child_process', 'node:child_process',
   'exec', 'execSync', 'execFile', 'execFileSync', 'execCommand',
   'spawn', 'spawnSync', 'fork',
+  // Remote commands, shells and subsystems (node-ssh, ssh2). `subsys` is
+  // ssh2's generic subsystem request; SFTP goes through node-ssh's
+  // requestSFTP, which does not use it.
   'shell', 'requestShell', 'withShell', 'subsys',
+  // node-ssh methods that run a remote command when given a method argument,
+  // or that transfer files.
+  'mkdir', 'getFile', 'putFile', 'putFiles', 'putDirectory', 'getDirectory',
+  // Port forwarding and other global requests (node-ssh, ssh2; ssh2's
+  // openssh_* methods are matched by prefix).
+  'forwardIn', 'forwardOut', 'unforwardIn', 'forwardInStreamLocal', 'forwardOutStreamLocal',
   // Module loading and native bindings.
   'require', 'createRequire', 'module', 'exports', 'mainModule',
   'getBuiltinModule', 'binding', '_linkedBinding', 'dlopen',
   // Code generation from strings, and ways to reach the global object.
   'eval', 'Function', 'constructor', 'globalThis', 'global', 'Reflect',
+  // Network clients available as globals without an import.
+  'fetch', 'WebSocket', 'XMLHttpRequest', 'EventSource',
+]);
+export const FORBIDDEN_PREFIXES = Object.freeze(['openssh_']);
+
+/** Prototype-chain and property-descriptor access, refused in all of src/. */
+export const REFLECTION_NAMES = Object.freeze([
+  'prototype', '__proto__', 'getPrototypeOf', 'setPrototypeOf',
+  'getOwnPropertyNames', 'getOwnPropertyDescriptor', 'getOwnPropertyDescriptors',
+  'getOwnPropertySymbols', '__lookupGetter__', '__lookupSetter__',
+  '__defineGetter__', '__defineSetter__',
 ]);
 
 /** The only `process.<name>` members src/ may use. */
 export const PROCESS_MEMBERS = Object.freeze(['env', 'exit', 'getuid', 'hrtime', 'on']);
-
-export const SSH_REFLECTION_NAMES = Object.freeze([
-  'getPrototypeOf', 'getOwnPropertyNames', 'getOwnPropertyDescriptor',
-  'getOwnPropertyDescriptors', 'getOwnPropertySymbols', '__proto__',
-  '__lookupGetter__', '__lookupSetter__', 'prototype',
-]);
 
 /**
  * Exemptions: { file, rule, name, reason, issue }. Empty by default. Each
@@ -113,7 +162,10 @@ export const SSH_REFLECTION_NAMES = Object.freeze([
 export const EXEMPTIONS = Object.freeze([]);
 
 const FORBIDDEN = new Set(FORBIDDEN_NAMES);
+const REFLECTION = new Set(REFLECTION_NAMES);
 const SKIP_KEYS = new Set(['type', 'start', 'end', 'loc', 'range', 'raw', 'regex', 'bigint']);
+const isForbidden = name => FORBIDDEN.has(name) || FORBIDDEN_PREFIXES.some(p => name.startsWith(p));
+const COMPUTED_KEY = { MemberExpression: 'property', Property: 'key', MethodDefinition: 'key', PropertyDefinition: 'key' };
 
 function lineOf(code, offset) {
   let line = 1;
@@ -204,6 +256,13 @@ function isRegexReceiver(object, proven) {
   return object.type === 'Identifier' && proven.has(object.name);
 }
 
+/** True when a string or template node sits where it names a property. */
+function isKeyPosition(parent, key) {
+  if (!parent) return false;
+  if (parent.type === 'MemberExpression') return key === 'property';
+  return (parent.type === 'Property' || parent.type === 'MethodDefinition' || parent.type === 'PropertyDefinition') && key === 'key';
+}
+
 function checkSpecifier(spec, file, filePath, srcDir) {
   if (typeof spec !== 'string') return 'non-string module specifier';
   if (spec.startsWith('./') || spec.startsWith('../')) {
@@ -219,9 +278,35 @@ function checkSpecifier(spec, file, filePath, srcDir) {
     }
     return null;
   }
-  if (!ALLOWED_IMPORTS.includes(spec)) return `module not in ALLOWED_IMPORTS: ${spec}`;
-  if (SSH_LIBRARY_MODULES.includes(spec) && !SSH_LIBRARY_FILES.includes(file)) return `${spec} imported outside ${SSH_LIBRARY_FILES.join(', ')}`;
+  if (!Object.hasOwn(ALLOWED_IMPORTS, spec)) return `module not in ALLOWED_IMPORTS: ${spec}`;
+  const files = ALLOWED_IMPORTS[spec];
+  if (files !== ANY && !files.includes(file)) return `${spec} may be imported only by ${files.join(', ')}`;
   return null;
+}
+
+/** Imported names of an import declaration: `default`, `*` or the exported name. */
+function importedNames(node) {
+  return node.specifiers.map(s => {
+    if (s.type === 'ImportDefaultSpecifier') return 'default';
+    if (s.type === 'ImportNamespaceSpecifier') return '*';
+    return s.imported.type === 'Literal' ? String(s.imported.value) : s.imported.name;
+  });
+}
+
+function checkSshImport(node, file, report) {
+  const allowed = SSH_FILE_IMPORTS[file];
+  const spec = String(node.source.value);
+  if (node.type !== 'ImportDeclaration') {
+    report(node, 'ssh-import', spec, 'a file that holds SSH objects re-exports nothing');
+    return;
+  }
+  if (!Object.hasOwn(allowed, spec)) {
+    report(node, 'ssh-import', spec, 'import not in SSH_FILE_IMPORTS');
+    return;
+  }
+  for (const name of importedNames(node)) {
+    if (!allowed[spec].includes(name)) report(node, 'ssh-import', `${spec}:${name}`, 'imported name not in SSH_FILE_IMPORTS');
+  }
 }
 
 /**
@@ -234,12 +319,13 @@ function checkSpecifier(spec, file, filePath, srcDir) {
  * @returns {{ file: string, line: number, rule: string, name: string, detail: string }[]}
  */
 export function checkSource(code, { file, filePath, srcDir = SRC_DIR } = {}) {
+  if (!acorn) throw new Error('parser not available: acorn is not installed (run npm ci)');
   const findings = [];
   const report = (node, rule, name, detail) => findings.push({ file, line: lineOf(code, node?.start ?? 0), rule, name, detail });
 
   let ast;
   try {
-    ast = parse(code, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true });
+    ast = acorn.parse(code, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true });
   } catch (err) {
     report(null, 'file', 'parse', `does not parse as an ES module: ${err.message}`);
     return findings;
@@ -252,8 +338,9 @@ export function checkSource(code, { file, filePath, srcDir = SRC_DIR } = {}) {
   const calledDirectly = new Set();
   walk(ast, node => { if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression') calledDirectly.add(node.callee); });
 
-  const checkName = (name, node, parent, key, context) => {
-    if (!FORBIDDEN.has(name)) return;
+  const checkName = (name, node, parent, key, context, asKey = true) => {
+    if (REFLECTION.has(name) && asKey) report(node, 'reflection', name, `reflection name in ${context}`);
+    if (!isForbidden(name)) return;
     if (name === 'constructor' && parent?.type === 'MethodDefinition' && parent.kind === 'constructor' && key === 'key') return;
     if (name === 'exec' && parent?.type === 'MemberExpression' && key === 'property' && !parent.computed &&
         isRegexReceiver(parent.object, proven) && calledDirectly.has(parent)) return;
@@ -261,6 +348,10 @@ export function checkSource(code, { file, filePath, srcDir = SRC_DIR } = {}) {
   };
 
   walk(ast, (node, parent, key) => {
+    const computedKey = COMPUTED_KEY[node.type];
+    if (sshObjectFile && computedKey && node.computed && node[computedKey].type !== 'Literal') {
+      report(node, 'ssh-computed', 'computed', `computed key (${node.type}) in a file that holds SSH objects`);
+    }
     switch (node.type) {
       case 'ImportDeclaration':
       case 'ExportNamedDeclaration':
@@ -268,39 +359,32 @@ export function checkSource(code, { file, filePath, srcDir = SRC_DIR } = {}) {
         if (!node.source) break;
         const problem = checkSpecifier(node.source.value, file, filePath, srcDir);
         if (problem) report(node, 'import', String(node.source.value), problem);
+        if (sshObjectFile) checkSshImport(node, file, report);
         break;
       }
       case 'ImportExpression':
         report(node, 'dynamic-import', 'import()', 'dynamic import');
         break;
-      case 'Identifier': {
-        // The module specifier string of an import is checked by the import rule.
+      case 'Identifier':
         checkName(node.name, node, parent, key, 'identifier');
         if (node.name === 'process') {
           const allowed = parent?.type === 'MemberExpression' && key === 'object' && !parent.computed &&
             parent.property.type === 'Identifier' && PROCESS_MEMBERS.includes(parent.property.name);
           if (!allowed) report(node, 'process', 'process', 'process used other than as process.<allowed member>');
         }
-        if (sshObjectFile && SSH_REFLECTION_NAMES.includes(node.name)) report(node, 'ssh-computed', node.name, 'reflection in a file that holds SSH objects');
         break;
-      }
       case 'PrivateIdentifier':
         checkName(node.name, node, parent, key, 'private name');
         break;
       case 'Literal':
         if (typeof node.value === 'string') {
+          // The module specifier of an import is checked by the import rules.
           if (key === 'source' && (parent?.type === 'ImportDeclaration' || parent?.type === 'ExportNamedDeclaration' || parent?.type === 'ExportAllDeclaration')) break;
-          checkName(node.value, node, parent, key, 'string');
-          if (sshObjectFile && SSH_REFLECTION_NAMES.includes(node.value)) report(node, 'ssh-computed', node.value, 'reflection in a file that holds SSH objects');
+          checkName(node.value, node, parent, key, 'string', isKeyPosition(parent, key));
         }
         break;
-      case 'TemplateElement':
-        checkName(node.value.cooked ?? node.value.raw, node, parent, key, 'template');
-        break;
-      case 'MemberExpression':
-        if (sshObjectFile && node.computed && node.property.type !== 'Literal') {
-          report(node, 'ssh-computed', 'computed', 'computed member access in a file that holds SSH objects');
-        }
+      case 'TemplateLiteral':
+        for (const q of node.quasis) checkName(q.value.cooked ?? q.value.raw, q, node, 'quasis', 'template', node.expressions.length === 0 && isKeyPosition(parent, key));
         break;
       default: break;
     }
@@ -346,8 +430,12 @@ export function checkTree(srcDir = SRC_DIR, { exemptions = EXEMPTIONS } = {}) {
 }
 
 function main(argv) {
-  if (argv.length > 1) {
+  if (argv.length > 1 || (argv[0] ?? '').startsWith('-')) {
     console.error('Usage: node scripts/no-exec-guard.mjs [srcDir]');
+    return 2;
+  }
+  if (!acorn) {
+    console.error('Never-exec guard error: parser not available: acorn is not installed (run npm ci).');
     return 2;
   }
   const srcDir = argv[0] ? path.resolve(argv[0]) : SRC_DIR;
@@ -361,7 +449,18 @@ function main(argv) {
   return 0;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Run when this file is the entry point, also when invoked through a symlink
+// (compared by real path, so a symlinked invocation never exits 0 unchecked).
+function isEntryPoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint()) {
   try {
     process.exitCode = main(process.argv.slice(2));
   } catch (err) {

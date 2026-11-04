@@ -37,7 +37,7 @@ export function isValidRoot(p) {
 export function isValidSiteName(name) {
   if (typeof name !== 'string' || name.length > 253) return false
   if (!/^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(name) || name.includes('..')) return false
-  return name !== '__proto__' && !(name in Object.prototype)
+  return name !== '__proto__' && !(name in {})
 }
 
 const RootSchema = boundedString({ max: MAX_ROOT_LENGTH }).refine(isValidRoot, {

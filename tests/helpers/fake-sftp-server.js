@@ -517,10 +517,14 @@ export async function startTcpForwarder(targetPort) {
   }
 }
 
-/** Assert helper: no exec, shell or any non-SFTP request reached the fake. */
+/**
+ * Assert helper: no exec, shell, global request (port forwarding and the
+ * like) or any other non-SFTP request reached the fake.
+ */
 export function nonSftpRequests(fake) {
   return {
     sessionRequests: fake.events.sessionRequests.map(r => r.type),
+    globalRequests: [...fake.events.globalRequests],
     channels: [...fake.events.channels],
     mutatingOps: fake.events.ops
       .map(o => o.op)
@@ -528,4 +532,4 @@ export function nonSftpRequests(fake) {
   }
 }
 
-export const NO_NON_SFTP_REQUESTS = Object.freeze({ sessionRequests: [], channels: [], mutatingOps: [] })
+export const NO_NON_SFTP_REQUESTS = Object.freeze({ sessionRequests: [], globalRequests: [], channels: [], mutatingOps: [] })
