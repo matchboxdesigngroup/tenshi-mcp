@@ -15,6 +15,8 @@ export const SESSION_READ_BUDGET_BYTES = 320 * 1024
 
 // SFTP status codes (draft-ietf-secsh-filexfer-02) as reported by ssh2.
 const SFTP_EOF = 1
+const SFTP_NO_SUCH_FILE = 2
+const SFTP_PERMISSION_DENIED = 3
 
 function isSftpStatus(err) {
   return Number.isInteger(err?.code) && err.code > 0
@@ -24,10 +26,13 @@ function isSftpStatus(err) {
  * Path operations: any SFTP status (no such file, permission denied, failure)
  * is reported as not available, so outside-root, missing and forbidden look
  * the same. Anything else (channel lost, protocol error) is a remote error.
+ * The audit-only reason keeps the status class (src/errors.js REASONS).
  */
 function pathError(err) {
   if (err instanceof ToolError) return err
-  return new ToolError(isSftpStatus(err) ? ERROR_CODES.NOT_AVAILABLE : ERROR_CODES.REMOTE, { cause: err })
+  if (!isSftpStatus(err)) return new ToolError(ERROR_CODES.REMOTE, { cause: err, reason: 'remote' })
+  const reason = err.code === SFTP_NO_SUCH_FILE ? 'not_found' : err.code === SFTP_PERMISSION_DENIED ? 'permission_denied' : 'remote_status'
+  return new ToolError(ERROR_CODES.NOT_AVAILABLE, { cause: err, reason })
 }
 
 function handleError(err) {

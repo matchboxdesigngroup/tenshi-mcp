@@ -41,8 +41,13 @@ const MAX_RELATIVE_PATH_LENGTH = 1024
 // zero-width characters) and the Unicode line and paragraph separators.
 const UNSAFE_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
 
-function notAvailable() {
-  return new ToolError(ERROR_CODES.NOT_AVAILABLE)
+/**
+ * Every refusal here is the same E_NOT_AVAILABLE for the caller; `reason`
+ * (see REASONS in src/errors.js) is read by the audit log only.
+ * @param {string} reason
+ */
+function notAvailable(reason) {
+  return new ToolError(ERROR_CODES.NOT_AVAILABLE, { reason })
 }
 
 /**
@@ -113,17 +118,17 @@ function hasPathSyntaxLookalike(text) {
  * @param {string} relativePath caller input
  */
 export function confineLexically(root, relativePath) {
-  if (typeof root !== 'string' || !posix.isAbsolute(root)) throw notAvailable()
-  if (typeof relativePath !== 'string' || relativePath.length === 0) throw notAvailable()
-  if (relativePath.length > MAX_RELATIVE_PATH_LENGTH) throw notAvailable()
-  if (relativePath.includes('\0') || UNSAFE_CHARS.test(relativePath) || !relativePath.isWellFormed()) throw notAvailable()
+  if (typeof root !== 'string' || !posix.isAbsolute(root)) throw notAvailable('internal')
+  if (typeof relativePath !== 'string' || relativePath.length === 0) throw notAvailable('path_syntax')
+  if (relativePath.length > MAX_RELATIVE_PATH_LENGTH) throw notAvailable('path_syntax')
+  if (relativePath.includes('\0') || UNSAFE_CHARS.test(relativePath) || !relativePath.isWellFormed()) throw notAvailable('path_syntax')
   // A backslash is a separator on some SFTP servers, and a percent sign
   // starts an encoding that some layer might decode: neither is accepted.
-  if (relativePath.includes('\\') || relativePath.includes('%')) throw notAvailable()
-  if (hasPathSyntaxLookalike(relativePath)) throw notAvailable()
-  if (posix.isAbsolute(relativePath)) throw notAvailable()
+  if (relativePath.includes('\\') || relativePath.includes('%')) throw notAvailable('path_syntax')
+  if (hasPathSyntaxLookalike(relativePath)) throw notAvailable('path_syntax')
+  if (posix.isAbsolute(relativePath)) throw notAvailable('outside_root')
   const resolved = posix.resolve(root, relativePath)
-  if (!isStrictlyWithin(root, resolved)) throw notAvailable()
+  if (!isStrictlyWithin(root, resolved)) throw notAvailable('outside_root')
   return posix.relative(posix.resolve(root), resolved)
 }
 
@@ -136,8 +141,8 @@ export function confineLexically(root, relativePath) {
  */
 function enforcePolicy(relativePath, allow, denyOptions) {
   if (typeof allow !== 'function') throw new ToolError(ERROR_CODES.INTERNAL)
-  if (isDenied(relativePath, denyOptions)) throw notAvailable()
-  if (allow(relativePath) !== true) throw notAvailable()
+  if (isDenied(relativePath, denyOptions)) throw notAvailable('denied')
+  if (allow(relativePath) !== true) throw notAvailable('not_allowed')
 }
 
 /**
@@ -179,26 +184,26 @@ export async function openConfinedFile(session, root, relativePath, allow, denyO
   // The server's answers are checked as given: a reply that is not in
   // canonical form is refused rather than normalised here.
   const canonicalRoot = await session.realpath(root)
-  if (!isCanonicalPath(canonicalRoot) || canonicalRoot === '/') throw notAvailable()
+  if (!isCanonicalPath(canonicalRoot) || canonicalRoot === '/') throw notAvailable('bad_reply')
   const canonicalTarget = await session.realpath(posix.join(canonicalRoot, normalised))
-  if (!isCanonicalPath(canonicalTarget)) throw notAvailable()
-  if (!isStrictlyWithin(canonicalRoot, canonicalTarget)) throw notAvailable()
+  if (!isCanonicalPath(canonicalTarget)) throw notAvailable('bad_reply')
+  if (!isStrictlyWithin(canonicalRoot, canonicalTarget)) throw notAvailable('outside_root')
   const canonicalRelative = posix.relative(canonicalRoot, canonicalTarget)
   enforcePolicy(canonicalRelative, allow, denyOptions)
 
   // realpath resolved every link, so the target itself must not be a link
   // and must be a regular file.
   const linkStats = await session.lstat(canonicalTarget)
-  if (!linkStats.isFile()) throw notAvailable()
+  if (!linkStats.isFile()) throw notAvailable('not_regular_file')
 
   const handle = await session.openRead(canonicalTarget)
   try {
     const stats = await handle.fstat()
-    if (!stats.isFile() || !Number.isSafeInteger(stats.size) || stats.size < 0) throw notAvailable()
+    if (!stats.isFile() || !Number.isSafeInteger(stats.size) || stats.size < 0) throw notAvailable('not_regular_file')
     // The opened file must be the one that was checked: same type,
     // permissions and owner, and the path must still resolve to itself.
-    if (!sameIdentity(linkStats, stats)) throw notAvailable()
-    if (await session.realpath(canonicalTarget) !== canonicalTarget) throw notAvailable()
+    if (!sameIdentity(linkStats, stats)) throw notAvailable('file_changed')
+    if (await session.realpath(canonicalTarget) !== canonicalTarget) throw notAvailable('file_changed')
     return { handle, size: stats.size, relativePath: canonicalRelative }
   } catch (err) {
     await handle.close().catch(() => {})

@@ -27,11 +27,38 @@ const MESSAGES = Object.freeze({
   E_INTERNAL: 'The tool failed unexpectedly.'
 })
 
+/**
+ * Why a call was refused or failed, for the audit log only (src/audit/log.js).
+ * The model never sees a reason: the message depends on the code alone, so
+ * refusals that share a code stay byte-identical in tool output. A reason
+ * outside this list is dropped.
+ */
+export const REASONS = Object.freeze([
+  'invalid_input',
+  'unknown_tool',
+  'unknown_site',
+  'path_syntax',
+  'outside_root',
+  'denied',
+  'not_allowed',
+  'bad_reply',
+  'not_regular_file',
+  'file_changed',
+  'not_found',
+  'permission_denied',
+  'remote_status',
+  'host_key',
+  'timeout',
+  'remote',
+  'internal'
+])
+
 export class ToolError extends Error {
   /**
    * @param {string} code one of ERROR_CODES
-   * @param {{ cause?: unknown }} [options] the cause stays in process memory
-   *   for debugging and is never formatted into the message
+   * @param {{ cause?: unknown, reason?: string }} [options] the cause stays in
+   *   process memory for debugging and is never formatted into the message;
+   *   the reason (one of REASONS) is read by the audit log only
    */
   constructor(code, options = {}) {
     const known = Object.hasOwn(MESSAGES, code) ? code : ERROR_CODES.INTERNAL
@@ -40,6 +67,9 @@ export class ToolError extends Error {
     this.code = known
     if (options.cause !== undefined) {
       Object.defineProperty(this, 'cause', { value: options.cause, enumerable: false })
+    }
+    if (REASONS.includes(options.reason)) {
+      Object.defineProperty(this, 'reason', { value: options.reason, enumerable: false })
     }
   }
 }
@@ -52,6 +82,6 @@ export class ToolError extends Error {
  */
 export function toToolError(err) {
   if (err instanceof ToolError) return err
-  if (err instanceof ZodError) return new ToolError(ERROR_CODES.INVALID_INPUT, { cause: err })
+  if (err instanceof ZodError) return new ToolError(ERROR_CODES.INVALID_INPUT, { cause: err, reason: 'invalid_input' })
   return new ToolError(ERROR_CODES.INTERNAL, { cause: err })
 }

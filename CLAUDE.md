@@ -42,7 +42,10 @@ node tests/integration.js <serverId> <siteDomain>
 
 ```
 src/
-  index.js              MCP entry point — registers tools, stdio transport
+  index.js              MCP entry point: registry, audit sink, stdio transport
+  server.js             MCP server: registers tools, wraps tools/call with the audit log
+  audit/log.js          Audit records: one per tools/call, shapes and keyed hashes, never content
+  audit/sink.js         Audit sink: stderr or TENSHI_MCP_AUDIT_LOG file, bounded batched non-blocking queue
   config/servers.js     Load + validate servers.json (Zod), lookup functions
   errors.js             Fixed error codes returned to the model
   ssh/client.js         Connection pool keyed by server ID, 5-min idle timeout, SFTP channels only
@@ -78,6 +81,8 @@ tests/
   boundaries.test.js    Unit: module boundaries of the SFTP layer
   server.test.js        Protocol: server name, tool list, refusal over stdio, env fallback
   audit-check.test.js   Unit: audit allowlist check
+  audit.test.js         Unit: audit record serialization, bounds, hashes, sink failures, audit file checks
+  audit-calls.test.js   Unit: one audit record per call and outcome, no content or secrets
   integration.js        Manual: end-to-end SFTP against real server
 ```
 
@@ -94,15 +99,16 @@ Each server also requires `hostKeys`: one to five SHA-256 host-key fingerprints 
 Details in the README security model; the design follows the platform ADR on tool-layer remote access (private platform repo). ADR-002's command allowlist is superseded.
 
 1. **Registry allowlist** — only servers and sites in `servers.json` are reachable; sites are looked up with `Object.hasOwn` only; unknown sites are refused before any network activity.
-2. **Host-key pinning** — `connect` in `src/ssh/client.js` always passes `hostHash: 'sha256'` and the verifier from `hostVerifierFor(server)` (`src/ssh/host-key.js`), on every new connection including reconnects. The verifier compares against every pin in constant time, with no early exit, and rejects during key exchange, before authentication. A mismatch is the fixed `E_HOST_KEY`, with no fingerprint, host or path and no log line. Never connect without the verifier, and never cache a verification result across connections.
+2. **Host-key pinning** — `connect` in `src/ssh/client.js` always passes `hostHash: 'sha256'` and the verifier from `hostVerifierFor(server)` (`src/ssh/host-key.js`), on every new connection including reconnects. The verifier compares against every pin in constant time, with no early exit, and rejects during key exchange, before authentication. A mismatch is the fixed `E_HOST_KEY`, with no fingerprint, host or path; only the audit log records it (code and reason, nothing else). Never connect without the verifier, and never cache a verification result across connections.
 3. **No remote commands** — tools use only the read-only SFTP facade in `src/ssh/sftp.js` (realpath, lstat, open for reading, fstat, bounded read, close). Never add an exec, shell or write path, and never import `src/ssh/client.js`, `node-ssh` or `ssh2` from a tool.
 4. **Path confinement** — `read_file` paths and log paths are checked lexically in the tool before any connection is opened (keep it that way: refusals must not depend on the server; encodings, backslashes, control, format and look-alike characters are refused), then resolved with SFTP realpath (non-canonical replies and a root resolving to `/` refused) and compared to the canonical root by path segment; the target must be a regular file (lstat before open; after open, fstat must match the lstat's type, mode and owner and a second realpath must return the same path). `read_log` serves only the exact configured log path.
 5. **Sensitive-file policy** — `src/policy/paths.js`, enforced inside `checkLexically` and `openConfinedFile` on the normalised and the canonical path: the site's mandatory allowlist (extensions and directories) and the built-in denylist (hidden files, wp-config variants, dumps, backups, archives, keys, credential files; case, Unicode and extension variants). Every new path-reading tool must go through `openConfinedFile` with an allow rule; never relax the denylist from the registry.
 6. **Redaction** — `src/policy/redact.js` replaces credential lines in all returned content. Lines are classified on their whole text before any filter, selection or cut (`read_file` reads a look-ahead past `maxBytes`; `read_log` classifies the partial first line of the window before dropping it), so the caller's cut never changes what is redacted; a redacted line is never returned in part. Keep every rule linear in the line length. Tools return only `redactedLines`.
 7. **Limits** — `read_log`: 500 lines, 51200 bytes, last 256 KB of the log, lines cut at 2000 characters, filter is a literal case-insensitive substring. `read_file`: 51200 bytes. 10-second deadline per call; on expiry the SFTP channel is closed.
-8. **Errors** — fixed codes from `src/errors.js` (`E_HOST_KEY` included); never echo arguments, server paths or remote error text.
+8. **Errors** — fixed codes from `src/errors.js` (`E_HOST_KEY` included); never echo arguments, server paths or remote error text. A `ToolError` may carry an audit-only `reason` (non-enumerable, from `REASONS`); never put it in tool output.
+9. **Audit log** — `src/audit/`: one record per `tools/call` the server answers, including SDK refusals; connect only through `createServer(...).connect`, which wraps the transport (README "Audit log" lists the fields; that list is the contract for the Tenshi side). Records go to stderr or the `TENSHI_MCP_AUDIT_LOG` file, never stdout. Never add content, caller strings (only length and keyed hash), credentials, hosts, users, key paths or pins to a record; every new tool needs an entry in `AUDITED_TOOLS` (`src/server.js`) and must call `audit.report`. Writes stay asynchronous and bounded; a sink failure must never fail or delay a tool call.
 
-Not covered yet (tracked privately): a swap that keeps type, mode and owner and is undone before the second realpath (SFTP v3 cannot bind a handle to a path), hard links (undetectable over SFTP v3), refusal kinds that differ in SFTP round trips (byte-identical output, different timing), audit log. Server-side confinement is the backstop.
+Not covered yet (tracked privately): a swap that keeps type, mode and owner and is undone before the second realpath (SFTP v3 cannot bind a handle to a path), hard links (undetectable over SFTP v3), refusal kinds that differ in SFTP round trips (byte-identical output, different timing), audit records lost in bursts beyond the queue bound (counted) and for requests cancelled before dispatch (no tool code runs). Server-side confinement is the backstop.
 
 ## MCP registration
 
