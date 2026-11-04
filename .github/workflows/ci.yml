@@ -48,5 +48,27 @@ jobs:
       - name: Never-exec guard (static)
         run: node scripts/no-exec-guard.mjs
 
-      - name: Unit tests (Vitest, SSH mocked)
+      # Real OpenSSH server for tests/sshd-fixture.test.js (#36): Ubuntu's own
+      # signed openssh-server package, no third-party action or image. The
+      # policy-rc.d guard keeps the package from starting the system sshd;
+      # the test starts its own sshd as the runner user on 127.0.0.1 with
+      # throwaway keys. The step fails if a system sshd is left listening.
+      - name: OpenSSH server for the sshd fixture
+        run: |
+          if [ ! -x /usr/sbin/sshd ]; then
+            printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d > /dev/null
+            sudo chmod 755 /usr/sbin/policy-rc.d
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends openssh-server
+            sudo rm -f /usr/sbin/policy-rc.d
+          fi
+          sudo systemctl disable --now ssh.socket ssh.service 2>/dev/null || true
+          dpkg-query -W -f='openssh-server ${Version}\n' openssh-server
+          if ss -ltnH | grep -q ':22 '; then echo 'a system sshd is listening on port 22' >&2; exit 1; fi
+
+      # The SFTP fake for most tests, and the real sshd fixture, which is
+      # required here (it fails instead of skipping when sshd is missing).
+      - name: Unit tests (Vitest, SFTP fake and real sshd)
+        env:
+          TENSHI_MCP_REQUIRE_SSHD: '1'
         run: npm test

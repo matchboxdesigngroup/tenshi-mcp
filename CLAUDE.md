@@ -23,7 +23,7 @@ npm test               # run all unit tests once
 npm run test:watch     # watch mode
 ```
 
-Unit tests use `vitest`; no real server needed. SFTP tests run against an in-process SSH server fake built on `ssh2`'s server mode (`tests/helpers/fake-sftp-server.js`, `127.0.0.1`, ephemeral port, generated keys). Tool tests fail if the fake ever receives an exec, shell or other non-SFTP request.
+Unit tests use `vitest`; no real server needed. SFTP tests run against an in-process SSH server fake built on `ssh2`'s server mode (`tests/helpers/fake-sftp-server.js`, `127.0.0.1`, ephemeral port, generated keys). Tool tests fail if the fake ever receives an exec, shell or other non-SFTP request. `tests/sshd-fixture.test.js` also runs the code against a real OpenSSH sshd it starts itself (unprivileged, 127.0.0.1, throwaway keys); it is skipped without `sshd` locally and required in CI. Every new path or argument rule needs a case in `tests/fixtures/injection-corpus.json`.
 
 ## CI checks
 
@@ -82,6 +82,8 @@ tests/
   boundaries.test.js    Unit: module boundaries of the SFTP layer
   no-exec-guard.test.js Unit: static never-exec guard
   no-exec-runtime.test.js  Unit: no process or remote command at runtime
+  injection-corpus.test.js  Unit: injection corpus (tests/fixtures/injection-corpus.json) against the fake
+  sshd-fixture.test.js  Fixture: corpus and confinement against a real unprivileged OpenSSH sshd (skipped locally without sshd, required in CI)
   server.test.js        Protocol: server name, tool list, refusal over stdio, env fallback
   audit-check.test.js   Unit: audit allowlist check
   audit.test.js         Unit: audit record serialization, bounds, hashes, sink failures, audit file checks
