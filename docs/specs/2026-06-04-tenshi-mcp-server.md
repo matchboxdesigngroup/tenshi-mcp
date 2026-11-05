@@ -2,7 +2,7 @@
 
 > **Rename note:** this plan was written before the project was renamed to Tenshi-MCP (tenshi#3). Package, server and registration names, the registry path variable (`TENSHI_MCP_SERVERS_PATH`, formerly `SSH_MCP_SERVERS_PATH`, still read as a deprecated fallback) and example paths are updated to the current names. The code samples show the plan, not the current code: see `src/config/servers.js` for how the path is resolved now.
 
-> **SFTP note:** Tasks 4 to 6 describe the original command executor (`src/ssh/executor.js`, `runCommand`) and tools that built remote command strings. That design was replaced: the executor is removed and both tools read over SFTP through a read-only facade (`src/ssh/sftp.js`, `src/ssh/confine.js`). The code samples in those tasks are historical; see the README security model and the note in `docs/adrs/ADR-002-command-security-model.md`.
+> **SFTP note:** Tasks 4 to 6 describe the original command executor (`src/ssh/executor.js`, `runCommand`) and tools that built remote command strings. That design was replaced: the executor is removed and both tools read over SFTP through a read-only facade (`src/ssh/sftp.js`, `src/ssh/confine.js`). The code samples in those tasks are historical and marked (removed) where the code no longer exists; no tool runs a remote command, there is no command allowlist, and there is no `wp_cli` tool (not part of V1). See the README security model and the note in `docs/adrs/ADR-002-command-security-model.md`.
 
 > **Policy note:** examples below that read `wp-config.php` describe the original plan. Since #20 that file, its variants and other sensitive files are always refused, `read_file` serves only extensions and directories in the site's `allow` list, and credential lines are redacted; see the README section "Sensitive-file policy".
 
@@ -10,7 +10,7 @@
 
 **Goal:** Build a local MCP server (stdio transport) that SSHs into configured servers and exposes two tools — `read_log` and `read_file` — for reading WordPress logs and files during Claude triage sessions.
 
-**Architecture:** A Node.js (ESM) process spawned by the parent agent as a child process. Tools look up server/site config from `servers.json`, open pooled SSH connections via `node-ssh`, run a small set of allowlisted read-only commands, and return structured JSON. Security is enforced at three layers: command allowlist in executor, path confinement in read-file, and host allowlist in the connection pool.
+**Architecture:** A Node.js (ESM) process spawned by the parent agent as a child process. Tools look up server/site config from `servers.json`, open pooled SSH connections via `node-ssh`, run a small set of allowlisted read-only commands, and return structured JSON. Security is enforced at three layers: command allowlist in executor, path confinement in read-file, and host allowlist in the connection pool. (Historical: the executor and its command allowlist were removed; tools read over SFTP only, see the SFTP note above.)
 
 **Tech Stack:** Node.js ≥20 (ESM), `@modelcontextprotocol/sdk`, `node-ssh`, `vitest` (tests), `zod` (schema validation)
 
@@ -25,14 +25,14 @@ src/
     servers.js        Load + validate servers.json; export getServerConfig / getSiteConfig
   ssh/
     client.js         Connection pool; getConnection(serverId) → live NodeSSH
-    executor.js       runCommand(serverId, cmd) → {stdout, stderr, exitCode}; allowlist + timeout
+    executor.js       (removed) runCommand(serverId, cmd) → {stdout, stderr, exitCode}; allowlist + timeout
   tools/
     read-log.js       read_log tool definition, schema, handler
     read-file.js      read_file tool definition, schema, handler
 
 tests/
   config.test.js      Unit: servers.js validation
-  executor.test.js    Unit: allowlist enforcement + timeout
+  executor.test.js    (removed) Unit: allowlist enforcement + timeout
   read-log.test.js    Unit: path resolution + output shaping
   read-file.test.js   Unit: path resolution + traversal guard
 
@@ -429,7 +429,7 @@ git commit -m "feat: SSH connection pool with idle timeout and allowlist guard"
 
 ---
 
-## Task 4: Command executor (`src/ssh/executor.js`)
+## Task 4: Command executor (`src/ssh/executor.js`) (removed)
 
 **Files:**
 - Create: `src/ssh/executor.js`
@@ -575,7 +575,7 @@ git commit -m "feat: SSH command executor with allowlist and timeout"
 
 ---
 
-## Task 5: `read_log` tool (`src/tools/read-log.js`)
+## Task 5: `read_log` tool (`src/tools/read-log.js`) (historical: now over SFTP)
 
 **Files:**
 - Create: `src/tools/read-log.js`
@@ -816,7 +816,7 @@ git commit -m "feat: read_log tool with path resolution and grep filter"
 
 ---
 
-## Task 6: `read_file` tool (`src/tools/read-file.js`)
+## Task 6: `read_file` tool (`src/tools/read-file.js`) (historical: now over SFTP)
 
 **Files:**
 - Create: `src/tools/read-file.js`
