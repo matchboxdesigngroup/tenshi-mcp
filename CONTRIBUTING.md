@@ -67,9 +67,10 @@ Unit tests use vitest with mocked SSH; no real server is needed. `tests/integrat
 1. `node scripts/audit-check.mjs` (the same check as `npm run audit:check`; fails on any high or critical advisory that is not in [`.audit-allowlist.json`](.audit-allowlist.json), and on any expired, stale or re-rated allowlist entry). It runs first, before anything is installed, so no dependency code (install scripts or tests) runs before the audit; it audits `package-lock.json` and needs no `node_modules`. It is run with `node` directly, so nothing in `node_modules/.bin` can stand in for `npm`.
 2. `npm ci` (install from the lockfile)
 3. `node scripts/no-exec-guard.mjs` (never-exec guard: fails if any file under `src/` could reach a process, remote-command, dynamic-loading or code-generation API, or imports a module not in its allowlist; it needs `node_modules` for its parser, acorn, so it runs after `npm ci`; also run by `npm test`)
-4. `npm test` (Vitest unit tests, including the audit gate's and the never-exec guard's own tests)
+4. Install Ubuntu's `openssh-server` package (only if `sshd` is missing; the system service is kept from starting) for the real-sshd fixture
+5. `npm test` with `TENSHI_MCP_REQUIRE_SSHD=1` (Vitest unit tests, including the audit gate's and the never-exec guard's own tests, the injection corpus, and `tests/sshd-fixture.test.js`, which must run, not skip)
 
-All four run in one job, `Install, test, audit`, and must pass before merge; a failing step stops the later ones. Only the official `actions/checkout` and `actions/setup-node` actions are used, pinned by full commit SHA with the version tag in a comment; the workflow uses no secrets and only reads the repository. Secret scanning is not part of CI yet; it waits for the scanning-approach ADR in the platform repo.
+All five run in one job, `Install, test, audit`, and must pass before merge; a failing step stops the later ones. Only the official `actions/checkout` and `actions/setup-node` actions are used, pinned by full commit SHA with the version tag in a comment; the workflow uses no secrets and only reads the repository. Secret scanning is not part of CI yet; it waits for the scanning-approach ADR in the platform repo.
 
 ### Audit allowlist
 

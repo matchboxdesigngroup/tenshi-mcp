@@ -307,7 +307,8 @@ The tools read over SFTP only. The design follows the platform ADR on tool-layer
 
 - The SFTP account's own rights are not narrowed by this server, so use a dedicated read-only account where you control the host; server-side confinement (a read-only account, chroot or a per-site user) is the backstop for the check-then-open and hard-link items below.
 - Check then open: SFTP v3 has no `O_NOFOLLOW` and cannot bind an open handle to the inode that was checked, so a path swapped between the checks and the open can make the server open another file. The checks after the open detect a swap that is still in place, or that changed the file's type, permissions or owner, and nothing is read in that case. A swap that keeps the file's type, permissions and owner and is undone before the second `realpath` is not detected, so another file's content can be returned (with redaction applied).
-- Hard links cannot be detected over SFTP v3 (the attributes carry no link count or inode). A hard link inside the root to a file elsewhere, also one put in place of a checked file with the same attributes, is served under its own name if that name passes the policy, with redaction applied.
+- Hard links cannot be detected over SFTP v3 (the attributes carry no link count or inode). A hard link inside the root to a file elsewhere, also one put in place of a checked file with the same attributes, is served under its own name if that name passes the policy, with redaction applied. `tests/sshd-fixture.test.js` shows this against a real sshd.
+- OpenSSH's `realpath` resolves a path whose last component does not exist (it fails only when a parent is missing); the SFTP fake answers no such file. Both end in the same `E_NOT_AVAILABLE`, because the target's `lstat` fails, but against OpenSSH a missing file costs one SFTP round trip more.
 - Refusals are byte-identical, but not identical in cost: a refusal made before any connection (unknown site, lexical or policy refusal of the request) sends no request, and a refusal on the server takes a different number of SFTP round trips depending on where it is decided (for example, a path whose resolved target is outside the root or denied, compared with a missing one). Timing can therefore tell some refusal kinds apart; it does not reveal file contents or whether a file under a denied name exists, because such requests are refused before any connection. With the server unreachable, an unknown site still gets `E_NOT_AVAILABLE` and a known site `E_REMOTE`.
 - Redaction is heuristic: a secret in a format the rules do not recognise is returned.
 - The never-exec guard checks names and syntax, not values. Outside `src/ssh/client.js` and `src/ssh/sftp.js`, a property name assembled at runtime and used as a computed key can reach any property of an object in scope, including the constructor of functions and so code generation; the guard does not prove that deliberately obfuscated code is absent, review does. It also does not see an SSH object passed to a function those two files already import, code inside an allowed dependency, or code outside `src/`. It guards against regressions in this repository, not against code that is already running in the process; a locked-down SFTP-only account on the server is the backstop.
@@ -325,6 +326,14 @@ npm run test:watch     # watch mode
 ```
 
 Tests use `vitest`. No real server is needed: the SFTP tests start an in-process SSH server built on `ssh2`'s server mode (`tests/helpers/fake-sftp-server.js`) on `127.0.0.1` with an ephemeral port and generated keys, serving a small virtual file tree.
+
+`tests/sshd-fixture.test.js` runs the real server code against a real OpenSSH `sshd` that the test starts itself: as the current user (no root), on `127.0.0.1` and an ephemeral port, with a throwaway host key pinned in the test registry and a throwaway client key, `restrict` in `authorized_keys`, public-key authentication only, a forced read-only `internal-sftp -R`, and no forwarding or TTY. The site tree is synthetic, in a temporary directory removed afterwards (`ChrootDirectory` needs root, so there is none). The fixture needs `sshd` (`/usr/sbin/sshd`, or `TENSHI_MCP_SSHD`) and `ssh-keygen`. Without them it is skipped locally; in CI (`CI=true`) or with `TENSHI_MCP_REQUIRE_SSHD=1` it fails instead. Run the corpus against both servers with one command:
+
+```bash
+TENSHI_MCP_REQUIRE_SSHD=1 npx vitest run tests/injection-corpus.test.js tests/sshd-fixture.test.js
+```
+
+The injection and traversal corpus (`tests/fixtures/injection-corpus.json`, run by `tests/injection-corpus.test.js` against the fake and by `tests/sshd-fixture.test.js` against sshd, with the same expectations) has 81 cases in 11 categories: separators, substitution, quoting, redirection, option injection, traversal encodings, symlinks, registry keys, sensitive files, resource abuse and hostile output. Every refusal must be the exact fixed message; no output may contain a canary, the fixture secret or a server path; hostile file and log content comes back verbatim as data, with credential lines redacted. After the corpus, the sshd test checks that no marker file was created and that sshd logged only SFTP subsystem requests on session channels (no exec, shell, pty, env or forwarding request).
 
 | Test file | Covers |
 |---|---|
@@ -344,6 +353,8 @@ Tests use `vitest`. No real server is needed: the SFTP tests start an in-process
 | `tests/errors.test.js` | Fixed error codes and messages |
 | `tests/boundaries.test.js` | Module boundaries: only `src/ssh/client.js` uses the SSH library, tools use the facade |
 | `tests/no-exec-guard.test.js` | Never-exec guard: `src/` passes with no exemptions; every forbidden pattern (imports, aliasing, string keys, destructuring, dynamic loading, code generation, forwarding, network globals, reflection, computed keys and pinned imports in the SSH files) is reported; unparseable, non-`.js` and symlinked files fail; exit codes of the command, also through a symlink and without the parser |
+| `tests/injection-corpus.test.js` | The injection and traversal corpus against the fake; cases marked lexical must be refused before any SFTP session opens |
+| `tests/sshd-fixture.test.js` | The corpus against a real OpenSSH sshd; no marker created and only SFTP requests logged by sshd; hard-link residual; OpenSSH `realpath` of a missing last component; host-key pin mismatch; the locked-down account runs no requested command and refuses writes |
 | `tests/no-exec-runtime.test.js` | `read_file` and `read_log` call no `child_process` function and no ssh2 or node-ssh exec, shell, subsystem, forwarding or transfer method (throwing stubs, with SFTP positive controls) |
 | `tests/server.test.js` | Protocol over stdio with the SDK client: server name, tool list, the `tools/list` result against `tests/fixtures/tools-list.json`, which arguments the SDK refuses before a handler runs (unknown keys are not refused), fixed refusal over stdio, env fallback |
 | `tests/schema.test.js` | Tool input schemas strip unknown keys; string bounds count UTF-16 units and keep zod's issue shape and the listed `minLength`/`maxLength` |
@@ -504,6 +515,11 @@ tests/
   boundaries.test.js    Unit: module boundaries of the SFTP layer
   no-exec-guard.test.js Unit: static never-exec guard rules and src/ check
   no-exec-runtime.test.js  Unit: no process or remote command at runtime
+  injection-corpus.test.js  Unit: injection and traversal corpus against the fake
+  sshd-fixture.test.js  Fixture: corpus and confinement against a real OpenSSH sshd
+  helpers/corpus.js     Corpus runner shared by the fake and the sshd tests
+  helpers/real-sshd.js  Starts an unprivileged OpenSSH sshd with throwaway keys
+  fixtures/injection-corpus.json  Corpus cases and the synthetic site tree
   server.test.js        Protocol: server name, tool list, refusal over stdio, env fallback, audit sink over stdio
   audit.test.js         Unit: record serialization and bounds, hashes, sink failures, audit file checks
   audit-calls.test.js   Unit: one audit record per call and outcome against the fake, no content or secrets
