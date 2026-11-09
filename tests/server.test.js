@@ -80,8 +80,8 @@ describe('MCP server over stdio', () => {
 
   // The SDK validates arguments against the registered schema before a
   // handler runs. These pin which arguments it refuses and at which path,
-  // not zod's wording, which differs between zod majors. SDK 1.30.1 lists
-  // one issue per line as "<zod message> at <dot path>" (1.29.0 printed the
+  // not zod's wording, which differs between zod majors. SDK 1.30.1 and
+  // 1.32.0 list one issue per line as "<zod message> at <dot path>" (1.29.0 printed the
   // zod issues as a JSON array). Over the wire an unknown key can only be
   // seen not to be refused; tests/schema.test.js checks that toolInputSchema
   // strips it from the parsed arguments.
@@ -129,6 +129,29 @@ describe('MCP server over stdio', () => {
         expect(result.content, JSON.stringify(args)).toEqual([
           { type: 'text', text: 'Error: E_NOT_AVAILABLE: The requested resource is not available.' }
         ])
+      }
+    } finally {
+      await client.close()
+    }
+  }, 20000)
+
+  // SDK 1.32.0 validates a tools/call without "arguments" as an empty object,
+  // so the refusal lists the missing required fields. 1.30.1 answered
+  // "Invalid input: expected object, received undefined" instead. Either way
+  // the call is refused in the SDK and no handler runs.
+  it('refuses a call without arguments exactly like an empty arguments object', async () => {
+    const { client } = await connect({ TENSHI_MCP_SERVERS_PATH: serversPath })
+    try {
+      for (const [name, required] of [['read_log', ['site', 'log']], ['read_file', ['site', 'path']]]) {
+        const absent = await client.callTool({ name })
+        const empty = await client.callTool({ name, arguments: {} })
+        expect(absent.isError).toBe(true)
+        expect(absent.content).toEqual(empty.content)
+        const prefix = `MCP error -32602: Input validation error: Invalid arguments for tool ${name}: `
+        const text = absent.content[0].text
+        expect(text.startsWith(prefix), text).toBe(true)
+        const issues = text.slice(prefix.length).split('\n')
+        expect(issues.map(issue => issue.split(' at ').pop()).sort(), text).toEqual([...required].sort())
       }
     } finally {
       await client.close()
